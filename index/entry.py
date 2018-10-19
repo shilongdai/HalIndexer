@@ -40,7 +40,7 @@ class Hit:
 
 		return struct.pack("!BII", self.kind, self.section, self.position)
 
-	def __eq__(self, o: object) -> bool:
+	def __eq__(self, o: "Hit") -> bool:
 		try:
 			if not self.kind == o.kind:
 				return False
@@ -52,7 +52,7 @@ class Hit:
 			return False
 		return True
 
-	def __ne__(self, o: object) -> bool:
+	def __ne__(self, o: "Hit") -> bool:
 		return not self.__eq__(o)
 
 	def __repr__(self):
@@ -201,6 +201,67 @@ class ReverseIndexEntry:
 		return str(self.__dict__)
 
 
+class LexiconEntry:
+	"""
+	A class representing a entry in the Lexicon of the indexer. The Lexicon maps every word id to a list of page ids.
+	The binary representation of the Lexicon entry is | word-id: 4 bytes| page count: 4 bytes| page id: 4 bytes| page id...|
+	"""
+
+	@classmethod
+	def unpack(cls, data):
+		"""
+		unpacks a LexiconEntry from its binary format to its object form.
+		:param data: the binary form of the LexiconEntry
+		:return: the object representation.
+		"""
+
+		word_id, page_count = struct.unpack("!II", data[:8])
+		data = data[8:]
+		format_str = "I" * page_count
+		format_str = "!" + format_str
+		page_list = struct.unpack(format_str, data)
+		result = LexiconEntry(word_id)
+		result.pages = list(page_list)
+		return result
+
+	def __init__(self, word_id):
+		"""
+		creates a new LexiconEntry
+		:param word_id: the id of the word
+		"""
+
+		self.word_id = word_id
+		self.pages = []
+
+	def pack(self):
+		"""
+		packs a LexiconEntry from its object representation to its binary representation.
+		:return: the binary representation of the Lexicon entry.
+		"""
+
+		format_str = "!II"
+		for i in self.pages:
+			format_str += "I"
+		result = struct.pack(format_str, self.word_id, len(self.pages), *self.pages)
+		return result
+
+	def __eq__(self, o: "LexiconEntry") -> bool:
+		try:
+			if self.word_id != o.word_id:
+				return False
+			if self.pages != o.pages:
+				return False
+		except AttributeError:
+			return False
+		return True
+
+	def __ne__(self, o: "LexiconEntry") -> bool:
+		return not self.__eq__(o)
+
+	def __repr__(self) -> str:
+		return str(self.__dict__)
+
+
 class TestHit(unittest.TestCase):
 
 	def test_packing(self):
@@ -267,3 +328,25 @@ class TestReverseEntry(unittest.TestCase):
 		entry_to_test = ReverseIndexEntry.unpack(reverse_entry_bytes)
 		entry_to_test.word_id = 1
 		self.assertEqual(reverse_entry, entry_to_test, "Reverse entry not unpacking according to format")
+
+
+class TestLexiconEntry(unittest.TestCase):
+
+	def test_packing(self):
+		lexicon_entry = LexiconEntry(1)
+		lexicon_entry.pages.extend([1, 2, 3, 4])
+		actual_bytes = lexicon_entry.pack()
+
+		format_str = "!II"
+		for i in lexicon_entry.pages:
+			format_str += "I"
+		expected_bytes = struct.pack(format_str, lexicon_entry.word_id, len(lexicon_entry.pages), *lexicon_entry.pages)
+		self.assertEqual(expected_bytes, actual_bytes, "LexiconEntry not packing according to the binary format")
+
+	def test_unpacking(self):
+		lexicon_entry = LexiconEntry(1)
+		lexicon_entry.pages.extend([1, 2, 3, 4])
+		lexicon_bytes = lexicon_entry.pack()
+
+		test_entry = LexiconEntry.unpack(lexicon_bytes)
+		self.assertEqual(lexicon_entry, test_entry, "LexiconEntry not unpacking according to the binary format")
