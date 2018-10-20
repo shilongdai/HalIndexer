@@ -4,8 +4,8 @@ import unittest
 
 class Hit:
 	"""
-	A class representing a hit in the index. As of now, the types of hit includes: text(1), anchor(2), title(3),
-	header(4), and url(5). The hit contains the section of the page that the hit occurred on, as well as the position
+	A class representing a hit in the index. As of now, the types of hit includes: text(1), anchor(2), title(3), header(4),
+	url(5), reference(6). The hit contains the section of the page that the hit occurred on, as well as the position
 	within the section. The binary format of the hit is | hit_type: 1 byte| section: 4 bytes| position: 4 bytes|
 	"""
 
@@ -262,6 +262,63 @@ class LexiconEntry:
 		return str(self.__dict__)
 
 
+class DictionaryEntry:
+
+	@classmethod
+	def unpack(cls, data):
+		parts = data.split(":")
+		key = parts[0]
+		for i in parts[1:-1]:
+			key += ":" + i
+		value = parts[-1]
+		return cls(key, value)
+
+	def __init__(self, key, value):
+		self.key = str(key)
+		self.value = str(value)
+
+	def pack(self):
+		return self.key + ":" + self.value
+
+	def __eq__(self, o: "DictionaryEntry") -> bool:
+		try:
+			if self.key != o.key:
+				return False
+			if self.value != o.value:
+				return False
+		except AttributeError:
+			return False
+		return True
+
+	def __ne__(self, o: "DictionaryEntry") -> bool:
+		return not self.__eq__(o)
+
+	def __repr__(self) -> str:
+		return str(self.__dict__)
+
+
+class WordDictionaryEntry(DictionaryEntry):
+
+	def __init__(self, word, word_id):
+		DictionaryEntry.__init__(self, word, word_id)
+
+	@property
+	def word(self):
+		return self.key
+
+	@word.setter
+	def word(self, word):
+		self.key = word
+
+	@property
+	def word_id(self):
+		return int(self.value)
+
+	@word_id.setter
+	def word_id(self, word_id):
+		self.value = word_id
+
+
 class TestHit(unittest.TestCase):
 
 	def test_packing(self):
@@ -350,3 +407,28 @@ class TestLexiconEntry(unittest.TestCase):
 
 		test_entry = LexiconEntry.unpack(lexicon_bytes)
 		self.assertEqual(lexicon_entry, test_entry, "LexiconEntry not unpacking according to the binary format")
+
+
+class TestDictionaryEntry(unittest.TestCase):
+
+	def test_packing(self):
+		dic_entry = DictionaryEntry("lexicon", 1)
+		dictionary_str = dic_entry.pack()
+
+		expected_str = "lexicon:1"
+		self.assertEqual(dictionary_str, expected_str, "Dictionary entry not packing according to format")
+
+	def test_unpacking(self):
+		dictionary_str = "1234:test"
+		dic_entry = DictionaryEntry.unpack(dictionary_str)
+		expected = DictionaryEntry("1234", "test")
+		self.assertEqual(expected, dic_entry, "DictionaryEntry not unpacking according to format")
+
+
+class TestWordDictionaryEntry(unittest.TestCase):
+
+	def test_url(self):
+		dictionary_str = "https://www.google.com:1"
+		dic_entry = WordDictionaryEntry.unpack(dictionary_str)
+		expected = WordDictionaryEntry("https://www.google.com", 1)
+		self.assertEqual(expected, dic_entry, "DictionaryEntry failed to handle URL")

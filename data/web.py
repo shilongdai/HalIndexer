@@ -25,3 +25,14 @@ class PageDocument:
 		self.texts = list(texts)
 		self.headers = list(headers)
 
+	def __repr__(self) -> str:
+		return str(self.__dict__)
+
+
+class Anchor:
+	def __init__(self, text, url):
+		self.text = text
+		self.url = url
+
+	def __repr__(self) -> str:
+		return str(self.__dict__)
