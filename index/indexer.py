@@ -1,5 +1,7 @@
 import os
 import shutil
+import string
+import struct
 import unittest
 
 from data.web import Anchor
@@ -7,6 +9,8 @@ from data.web import PageDocument
 from index.entry import ForwardIndexEntry
 from index.entry import Hit
 from index.entry import WordDictionaryEntry
+from index.entry import dump_dictionary
+from index.entry import load_dictionary
 
 
 def file_binary_search(file, target, comparator, entry_size, start, end):
@@ -31,6 +35,27 @@ def file_binary_search(file, target, comparator, entry_size, start, end):
 		return file_binary_search(file, target, comparator, entry_size, seek_position + entry_size, end)
 	else:
 		return file_binary_search(file, target, comparator, entry_size, start, seek_position)
+
+
+def merge_list_dictionaries(dictionaries):
+	result_dict = dict()
+	for dictionary in dictionaries:
+		for key, value in dictionary.items():
+			if key not in result_dict:
+				result_dict[key] = list()
+			result_dict[key].extend(dictionary[key])
+	return result_dict
+
+
+def stripe_enclosing_punctuation(target: str):
+	if len(target) == 0:
+		return target
+	lowerbound, upperbound = 0, len(target)
+	if target[0] in string.punctuation:
+		lowerbound += 1
+	if target[-1] in string.punctuation:
+		upperbound -= 1
+	return target[lowerbound:upperbound]
 
 
 class WordDictionary:
@@ -65,6 +90,8 @@ class WordDictionary:
 			dictionary_file.close()
 
 	def get_word_id(self, word):
+		word = stripe_enclosing_punctuation(word)
+		word = word.lower()
 		if word in self._dictionary:
 			return self._dictionary[word].word_id
 		dic_entry = WordDictionaryEntry(word, self.current_id)
@@ -82,22 +109,87 @@ class ForwardIndex:
 		self.index_dir = index_dir
 		self._word_dic = word_dic
 		self._forward_index_path = index_dir + "/forward_index"
-		if not os.path.isfile(self._forward_index_path):
-			with open(self._forward_index_path, mode = "w"):
-				pass
-		self._forward_index = open(self._forward_index_path, mode = "rb+")
+		self._forward_index_map_path = index_dir + "/forward_index_map"
+		self._forward_index = open(self._forward_index_path, mode = "ab+")
+		self._forward_index_map = open(self._forward_index_map_path, mode = "a+")
+		self._index_size = os.path.getsize(self._forward_index_path)
+		self._position_mapping = dict()
 
 	def load(self):
-		pass
+		self._position_mapping = load_dictionary(self._forward_index_map)
 
 	def index(self, data):
-		pass
+		forward_entry = ForwardIndexEntry(data.doc_id)
+		title_hits = self._title_to_hits(data.title)
+		header_hits = self._headers_to_hits(data.headers)
+		text_hits = self._texts_to_hits(data.texts)
+		anchor_hits = self._anchor_to_hits(data.anchors)
+		url_hits = self._url_to_hits(data.url)
+		master_dic = merge_list_dictionaries((title_hits, header_hits, text_hits, anchor_hits, url_hits))
+		forward_entry.hits = master_dic
+		self._write_forward_entry(forward_entry)
 
 	def get_entry(self, page_id):
-		pass
+		if page_id not in self._position_mapping:
+			return None
+		position = self._position_mapping[page_id]
+		self._forward_index.seek(position, 0)
+		return self._read_forward_entry(self._forward_index)
 
 	def close(self):
+		dump_dictionary(self._position_mapping, self._forward_index_map)
 		self._forward_index.close()
+		self._forward_index_map.close()
+
+	def _write_forward_entry(self, entry):
+		forward_binary = entry.pack()
+		size = len(forward_binary)
+		size_byte = struct.pack("!I", size)
+		data = size_byte + forward_binary
+		self._forward_index.write(data)
+		self._position_mapping[entry.page_id] = self._index_size
+		self._index_size += len(data)
+
+	def _read_forward_entry(self, file):
+		metabytes = file.read(4)
+		size = struct.unpack("!I", metabytes)
+		data_bytes = file.read(size[0])
+		return ForwardIndexEntry.unpack(data_bytes)
+
+	def _title_to_hits(self, title):
+		return self._scan_hits([title], Hit.TITLE_HIT)
+
+	def _headers_to_hits(self, headers):
+		return self._scan_hits(headers, Hit.HEADER_HIT)
+
+	def _texts_to_hits(self, texts):
+		return self._scan_hits(texts, Hit.TEXT_HIT)
+
+	def _anchor_to_hits(self, anchors):
+		anchor_texts = []
+		for anchor in anchors:
+			anchor_texts.append(anchor.text)
+		return self._scan_hits(anchor_texts, Hit.ANCHOR_HIT)
+
+	def _url_to_hits(self, url):
+		return self._scan_hits([url], Hit.URL_HIT)
+
+	def _scan_hits(self, sections, kind):
+		master_result = dict()
+		for count, section in enumerate(sections):
+			result_dict = self._scan_section(count, section, kind)
+			master_result = merge_list_dictionaries((master_result, result_dict))
+		return master_result
+
+	def _scan_section(self, section_num, section: str, kind: int):
+		words = section.split(" ")
+		result = dict()
+		for count, word in enumerate(words):
+			word_id = self._word_dic.get_word_id(word)
+			if word_id not in result:
+				result[word_id] = []
+			result[word_id].append(Hit(kind, section_num, count))
+		return result
 
 
 class Indexer:
@@ -154,17 +246,20 @@ class TestForwardIndex(unittest.TestCase):
 			forward_index.index(page)
 			forward_entry = forward_index.get_entry(1)
 			expected_entry = ForwardIndexEntry(1)
-			expected_entry.hits[word_dictionary.get_word_id("Go")] = [Hit(1, 0, 0), Hit(4, 0, 0)]
-			expected_entry.hits[word_dictionary.get_word_id("example")] = [Hit(2, 0, 0), Hit(1, 0, 2), Hit(4, 0, 2)]
-			expected_entry.hits[word_dictionary.get_word_id("to")] = [Hit(4, 0, 1)]
-			expected_entry.hits[word_dictionary.get_word_id("with")] = [Hit(1, 0, 1)]
-			expected_entry.hits[word_dictionary.get_word_id("test")] = [Hit(3, 0, 0)]
-			expected_entry.hits[word_dictionary.get_word_id("page")] = [Hit(3, 0, 1)]
-			expected_entry.hits[word_dictionary.get_word_id("https://www.test.com")] = [Hit(5, 0, 0)]
+			expected_entry.hits[word_dictionary.get_word_id("test")] = [Hit(Hit.TITLE_HIT, 0, 0)]
+			expected_entry.hits[word_dictionary.get_word_id("page")] = [Hit(Hit.TITLE_HIT, 0, 1)]
+			expected_entry.hits[word_dictionary.get_word_id("Go")] = [Hit(Hit.HEADER_HIT, 0, 0),
+			                                                          Hit(Hit.TEXT_HIT, 0, 0)]
+			expected_entry.hits[word_dictionary.get_word_id("to")] = [Hit(Hit.HEADER_HIT, 0, 1)]
+			expected_entry.hits[word_dictionary.get_word_id("example")] = [Hit(Hit.HEADER_HIT, 0, 2),
+			                                                               Hit(Hit.TEXT_HIT, 0, 2),
+			                                                               Hit(Hit.ANCHOR_HIT, 0, 0)]
+			expected_entry.hits[word_dictionary.get_word_id("with")] = [Hit(Hit.TEXT_HIT, 0, 1)]
+			expected_entry.hits[word_dictionary.get_word_id("https://www.test.com")] = [Hit(Hit.URL_HIT, 0, 0)]
 			self.assertEqual(expected_entry, forward_entry, "Failed to index/retrieve correctly")
-			word_dictionary.close()
 		finally:
 			forward_index.close()
+			word_dictionary.close()
 
 	@classmethod
 	def tearDownClass(cls):
@@ -263,10 +358,22 @@ class TestWordDictionary(unittest.TestCase):
 		self.assertEqual(3, dictionary.get_word_id("https://www.google.com"), "Dictionary failed to sync")
 		dictionary.close()
 
+	def test_word_identification(self):
+		dictionary = WordDictionary("identification_test")
+		dictionary.load()
+		dictionary.add_word("lexicon")
+		self.assertEqual(1, dictionary.get_word_id("lexicon"), "Dictionary failed basic retrieval")
+		self.assertEqual(1, dictionary.get_word_id("Lexicon"), "Dictionary failed capitalization identification")
+		self.assertEqual(1, dictionary.get_word_id("LEXICON"), "Dictionary failed capitalization identification")
+		self.assertEqual(1, dictionary.get_word_id("'lexicon'"), "Dictionary failed punctuation identification")
+		self.assertEqual(1, dictionary.get_word_id("lexicon,"), "Dictionary failed punctuation identification")
+		self.assertEqual(1, dictionary.get_word_id(".lexicon"), "Dictionary failed punctuation identification")
+
 	@classmethod
 	def tearDownClass(cls):
 		os.remove("dictionary")
 		os.remove("persistence_test")
+		os.remove("identification_test")
 
 
 class TestFileBinarySearch(unittest.TestCase):

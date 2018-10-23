@@ -2,12 +2,33 @@ import struct
 import unittest
 
 
+def dump_dictionary(dictionary, text_file):
+	for key, value in dictionary.items():
+		entry = DictionaryEntry(key, value)
+		text_file.write(entry.pack() + '\n')
+
+
+def load_dictionary(text_file):
+	result = dict()
+	for line in text_file:
+		entry = DictionaryEntry.unpack(line)
+		result[entry.key] = entry.value
+	return result
+
+
 class Hit:
 	"""
 	A class representing a hit in the index. As of now, the types of hit includes: text(1), anchor(2), title(3), header(4),
 	url(5), reference(6). The hit contains the section of the page that the hit occurred on, as well as the position
 	within the section. The binary format of the hit is | hit_type: 1 byte| section: 4 bytes| position: 4 bytes|
 	"""
+
+	TEXT_HIT = 1
+	ANCHOR_HIT = 2
+	TITLE_HIT = 3
+	HEADER_HIT = 4
+	URL_HIT = 5
+	REFERENCE_HIT = 6
 
 	@classmethod
 	def unpack(cls, data):
