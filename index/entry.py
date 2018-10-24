@@ -1,19 +1,19 @@
+import json
+import os.path
 import struct
 import unittest
 
 
 def dump_dictionary(dictionary, text_file):
-	for key, value in dictionary.items():
-		entry = DictionaryEntry(key, value)
-		text_file.write(entry.pack() + '\n')
+	with open(text_file, "w") as dump_file:
+		json.dump(dictionary, dump_file)
 
 
 def load_dictionary(text_file):
-	result = dict()
-	for line in text_file:
-		entry = DictionaryEntry.unpack(line)
-		result[entry.key] = entry.value
-	return result
+	if not os.path.isfile(text_file):
+		return dict()
+	with open(text_file, "r") as read_file:
+		return json.load(read_file)
 
 
 class Hit:

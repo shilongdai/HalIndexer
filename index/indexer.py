@@ -115,12 +115,11 @@ class ForwardIndex:
 		self._forward_index_path = index_dir + "/forward_index"
 		self._forward_index_map_path = index_dir + "/forward_index_map"
 		self._forward_index = open(self._forward_index_path, mode = "ab+")
-		self._forward_index_map = open(self._forward_index_map_path, mode = "a+")
 		self._index_size = os.path.getsize(self._forward_index_path)
 		self._position_mapping = dict()
 
 	def load(self):
-		self._position_mapping = load_dictionary(self._forward_index_map)
+		self._position_mapping = load_dictionary(self._forward_index_map_path)
 
 	def index(self, data):
 		forward_entry = ForwardIndexEntry(data.doc_id)
@@ -142,9 +141,8 @@ class ForwardIndex:
 		return self._read_forward_entry(self._forward_index)
 
 	def close(self):
-		dump_dictionary(self._position_mapping, self._forward_index_map)
+		dump_dictionary(self._position_mapping, self._forward_index_map_path)
 		self._forward_index.close()
-		self._forward_index_map.close()
 
 	def _write_forward_entry(self, entry):
 		forward_binary = entry.pack()
@@ -218,6 +216,7 @@ class ReverseIndex:
 				for e in entries:
 					reverse_index_file.write(e.pack())
 		self._add_to_lexicon(reverse_entries)
+		return reverse_entries
 
 	def get_entries(self, word_id):
 		entries = self._load_reverse_entries(word_id)
@@ -299,32 +298,81 @@ class Indexer:
 	The Anatomy of a Large-Scale Hypertextual Web Search Engine. Currently, it is not thread safe.
 	"""
 
-	def __init__(self, index_dir = "index"):
+	def __init__(self, index_dir = "index", dampener = 0.8):
+		if not os.path.isdir(index_dir):
+			os.mkdir(index_dir)
 		self.index_dir = index_dir
-		self._forward_index_path = index_dir + "/forward_index"
-		self._reverse_index_path = index_dir + "/reverse_index"
-		self._lexicon_path = index_dir + "/lexicon_index"
-		self._dictionary_path = index_dir + "/dictionary"
-		self._forward_index = open(self._forward_index_path, mode = "rb+")
-		self._reverse_index = open(self._reverse_index_path, mode = "rb+")
-		self._lexicon = open(self._lexicon_path, mode = "rb+")
-		self._dictionary = WordDictionary(self._dictionary_path)
+		self._dampener = dampener
+		self._word_dictionary_path = index_dir + "/word_dict"
+		self._link_out_path = index_dir + "/link_out"
+		self._references_tracker_path = index_dir + "/reference_count"
+		self._url_mapper_path = index_dir + "/url_mapper"
+		self._page_id_mapper_path = index_dir + "/page_id_mapper"
+		self._word_dictionary = WordDictionary(self._word_dictionary_path)
+		self._forward_index = ForwardIndex(self._word_dictionary, index_dir)
+		self._reverse_index = ReverseIndex(index_dir)
+		self._link_out_counts = dict()
+		self._references_tracker = dict()
+		self._url_page_id_mapper = dict()
+		self._page_id_url_mapper = dict()
 
 	def load(self):
-		self._dictionary.load()
+		self._word_dictionary.load()
+		self._forward_index.load()
+		self._reverse_index.load()
+		self._link_out_counts = load_dictionary(self._link_out_path)
+		self._references_tracker = load_dictionary(self._references_tracker_path)
+		self._url_page_id_mapper = load_dictionary(self._url_mapper_path)
+		self._page_id_url_mapper = load_dictionary(self._page_id_mapper_path)
 
 	def index(self, data):
-		pass
+		if data.url in self._url_page_id_mapper:
+			return
+		forward_entry = self._forward_index.index(data)
+		self._reverse_index.index(forward_entry)
+		self._url_page_id_mapper[data.url] = forward_entry.page_id
+		self._page_id_url_mapper[forward_entry.page_id] = data.url
+		self._link_out_counts[forward_entry.page_id] = len(data.anchors)
+		unique_anchors = set(data.anchors)
+		for anchor in unique_anchors:
+			if anchor.url not in self._references_tracker:
+				self._references_tracker[anchor.url] = []
+			self._references_tracker[anchor.url].append(forward_entry.page_id)
 
 	def search_by_keywords(self, keywords):
-		return []
+		keyword_id = self._word_dictionary.get_word_id(keywords)
+		pages = self._reverse_index.get_page_ids(keyword_id)
+		ranked_pages = {page_id: self._page_rank(page_id) for page_id in pages}
+		sorted_pages = []
+		for key, item in sorted(ranked_pages.items(), key = lambda entry: entry[1], reverse = True):
+			sorted_pages.append(key)
+		return sorted_pages
 
 	def close(self):
-		self._dictionary.close()
+		self._word_dictionary.close()
+		self._forward_index.close()
+		self._reverse_index.close()
+		dump_dictionary(self._link_out_counts, self._link_out_path)
+		dump_dictionary(self._references_tracker, self._references_tracker_path)
+		dump_dictionary(self._url_page_id_mapper, self._url_mapper_path)
 
-	def _convert_word_to_id(self, word):
-		if word in self._dictionary:
-			return self._dictionary[word]
+	def _page_rank(self, page_id):
+		return self._page_rank_recursive(page_id, dict())
+
+	def _page_rank_recursive(self, page_id, tracker):
+		if page_id in tracker:
+			return tracker[page_id]
+		rand_probability = 1 - self._dampener
+		link_probability = 0
+		if page_id not in self._page_id_url_mapper:
+			return rand_probability
+		url = self._page_id_url_mapper[page_id]
+		for page in self._references_tracker.get(url, []):
+			link_probability = link_probability + (
+					self._page_rank_recursive(page, tracker) / self._link_out_counts[page])
+		page_rank = rand_probability + link_probability
+		tracker[page_id] = page_rank
+		return page_rank
 
 
 class TestForwardIndex(unittest.TestCase):
@@ -453,12 +501,13 @@ class TestIndexer(unittest.TestCase):
 	def test_multiple_entry_with_single_word_query(self):
 		indexer = self.load_indexer()
 		pages = self.create_simple_multipage_data()
-		indexer.index(pages)
+		for page in pages:
+			indexer.index(page)
 		query_result = indexer.search_by_keywords("Page")
 		self.assertEqual(3, len(query_result), "search_by_keywords did not return the pages that it should match")
 		self.assertEqual(3, query_result[0], "The page Page 1 should be ranked first")
 		self.assertEqual(1, query_result[1], "The page Page 2 should be ranked second")
-		self.assertEqual(2, query_result[3], "The page Page 3 should be ranked third")
+		self.assertEqual(2, query_result[2], "The page Page 3 should be ranked third")
 		indexer.close()
 
 	def test_persistence(self):
@@ -471,6 +520,9 @@ class TestIndexer(unittest.TestCase):
 		query_result = indexer.search_by_keywords("persistence")
 		self.assertEqual(1, len(query_result), "Failed to persist")
 		self.assertEqual(1, query_result[0], "Failed to maintain integrity")
+
+	def tearDown(self):
+		shutil.rmtree("index")
 
 
 class TestWordDictionary(unittest.TestCase):
