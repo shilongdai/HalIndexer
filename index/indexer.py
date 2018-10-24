@@ -4,10 +4,14 @@ import string
 import struct
 import unittest
 
+from sortedcontainers import SortedList
+
 from data.web import Anchor
 from data.web import PageDocument
 from index.entry import ForwardIndexEntry
 from index.entry import Hit
+from index.entry import LexiconEntry
+from index.entry import ReverseIndexEntry
 from index.entry import WordDictionaryEntry
 from index.entry import dump_dictionary
 from index.entry import load_dictionary
@@ -50,12 +54,12 @@ def merge_list_dictionaries(dictionaries):
 def stripe_enclosing_punctuation(target: str):
 	if len(target) == 0:
 		return target
-	lowerbound, upperbound = 0, len(target)
+	lower_bound, upper_bound = 0, len(target)
 	if target[0] in string.punctuation:
-		lowerbound += 1
+		lower_bound += 1
 	if target[-1] in string.punctuation:
-		upperbound -= 1
-	return target[lowerbound:upperbound]
+		upper_bound -= 1
+	return target[lower_bound:upper_bound]
 
 
 class WordDictionary:
@@ -90,7 +94,7 @@ class WordDictionary:
 			dictionary_file.close()
 
 	def get_word_id(self, word):
-		word = stripe_enclosing_punctuation(word)
+		word = stripe_enclosing_punctuation(word.rstrip())
 		word = word.lower()
 		if word in self._dictionary:
 			return self._dictionary[word].word_id
@@ -128,6 +132,7 @@ class ForwardIndex:
 		master_dic = merge_list_dictionaries((title_hits, header_hits, text_hits, anchor_hits, url_hits))
 		forward_entry.hits = master_dic
 		self._write_forward_entry(forward_entry)
+		return forward_entry
 
 	def get_entry(self, page_id):
 		if page_id not in self._position_mapping:
@@ -189,6 +194,102 @@ class ForwardIndex:
 			if word_id not in result:
 				result[word_id] = []
 			result[word_id].append(Hit(kind, section_num, count))
+		return result
+
+
+class ReverseIndex:
+
+	def __init__(self, index_dir = "index"):
+		self.index_dir = index_dir
+		self._reverse_index_path = index_dir + "/reverse_indexes"
+		self._lexicon_path = index_dir + "/lexicon"
+		self._lexicon = dict()
+
+	def load(self):
+		if not os.path.isdir(self._reverse_index_path):
+			os.mkdir(self._reverse_index_path)
+		self._load_lexicon()
+
+	def index(self, forward_entry):
+		reverse_entries = self._convert_to_reverse_indexes(forward_entry)
+		for word_id, entries in reverse_entries.items():
+			file_id = self._reverse_index_path + "/" + str(word_id)
+			with open(file_id, "ab+") as reverse_index_file:
+				for e in entries:
+					reverse_index_file.write(e.pack())
+		self._add_to_lexicon(reverse_entries)
+
+	def get_entries(self, word_id):
+		entries = self._load_reverse_entries(word_id)
+		for entry in entries:
+			entry.word_id = word_id
+		return entries
+
+	def get_page_ids(self, word_id):
+		return self._lexicon.get(word_id, [])
+
+	def close(self):
+		self._write_lexicon()
+
+	def _convert_to_reverse_indexes(self, forward_entry):
+		result = dict()
+		for word_id, hit_list in forward_entry.hits.items():
+			if word_id not in result:
+				result[word_id] = []
+			entry = ReverseIndexEntry(word_id, forward_entry.page_id)
+			entry.hits.extend(hit_list)
+			result[word_id].append(entry)
+		return result
+
+	def _add_to_lexicon(self, reverse_entries):
+		for word_id, entries in reverse_entries.items():
+			for e in entries:
+				self._insert_to_lexicon(word_id, e.page_id)
+
+	def _insert_to_lexicon(self, word_id, page_id):
+		if word_id not in self._lexicon:
+			self._lexicon[word_id] = SortedList()
+		self._lexicon[word_id].add(page_id)
+
+	def _load_lexicon(self):
+		if not os.path.isfile(self._lexicon_path):
+			with open(self._lexicon_path, "w"):
+				pass
+		with open(self._lexicon_path, "rb") as lexicon_file:
+			lexicon_data = lexicon_file.read()
+			start = 0
+			end = len(lexicon_data)
+			while start < end:
+				entry_len = struct.unpack("!I", lexicon_data[start: start + 4])
+				entry = LexiconEntry.unpack(lexicon_data[start:start + entry_len[0] + 4])
+				start += entry_len[0]
+				start += 4
+				for page in entry.pages:
+					self._insert_to_lexicon(entry.word_id, page)
+
+	def _write_lexicon(self):
+		with open(self._lexicon_path, "ab") as lexicon_file:
+			for word_id, pages in self._lexicon.items():
+				entry = LexiconEntry(word_id)
+				entry.pages.extend(pages)
+				lexicon_file.write(entry.pack())
+
+	def _load_reverse_entries(self, word_id):
+		path_to_entries = self._reverse_index_path + "/" + str(word_id)
+		if not os.path.isfile(path_to_entries):
+			with open(path_to_entries, "w"):
+				pass
+		result = []
+		with open(path_to_entries, "rb") as reverse_file:
+			data = reverse_file.read()
+			start = 0
+			end = len(data)
+			while start < end:
+				entry_len = struct.unpack("!I", data[start: start + 4])
+				entry = ReverseIndexEntry.unpack(data[start:start + entry_len[0] + 4])
+				start += entry_len[0]
+				start += 4
+				result.append(entry)
 		return result
 
 
@@ -259,6 +360,47 @@ class TestForwardIndex(unittest.TestCase):
 			self.assertEqual(expected_entry, forward_entry, "Failed to index/retrieve correctly")
 		finally:
 			forward_index.close()
+			word_dictionary.close()
+
+	@classmethod
+	def tearDownClass(cls):
+		shutil.rmtree("index")
+		os.remove("word_dict")
+
+
+class TestReverseIndex(unittest.TestCase):
+
+	@classmethod
+	def setUpClass(cls):
+		os.mkdir("index")
+
+	def test_index(self):
+		word_dictionary = WordDictionary("word_dict")
+		word_dictionary.load()
+		forward_entry = ForwardIndexEntry(1)
+		forward_entry.hits[word_dictionary.get_word_id("Go")] = [Hit(Hit.HEADER_HIT, 0, 0),
+		                                                         Hit(Hit.TEXT_HIT, 0, 0)]
+		forward_entry.hits[word_dictionary.get_word_id("example")] = [Hit(Hit.HEADER_HIT, 0, 2),
+		                                                              Hit(Hit.TEXT_HIT, 0, 2),
+		                                                              Hit(Hit.ANCHOR_HIT, 0, 0)]
+		reverse_index = ReverseIndex()
+		try:
+			reverse_index.load()
+			reverse_index.index(forward_entry)
+			reverse_entries_go = reverse_index.get_entries(word_dictionary.get_word_id("go"))
+			reverse_entries_example = reverse_index.get_entries(word_dictionary.get_word_id("example"))
+			expected_entry_go = ReverseIndexEntry(word_dictionary.get_word_id("go"), 1)
+			expected_entry_go.hits.extend([Hit(Hit.HEADER_HIT, 0, 0), Hit(Hit.TEXT_HIT, 0, 0)])
+			expected_entry_example = ReverseIndexEntry(word_dictionary.get_word_id("example"), 1)
+			expected_entry_example.hits.extend([Hit(Hit.HEADER_HIT, 0, 2),
+			                                    Hit(Hit.TEXT_HIT, 0, 2),
+			                                    Hit(Hit.ANCHOR_HIT, 0, 0)])
+			self.assertEqual(1, len(reverse_entries_go))
+			self.assertEqual(1, len(reverse_entries_example))
+			self.assertEqual(expected_entry_go, reverse_entries_go[0])
+			self.assertEqual(expected_entry_example, reverse_entries_example[0])
+		finally:
+			reverse_index.close()
 			word_dictionary.close()
 
 	@classmethod

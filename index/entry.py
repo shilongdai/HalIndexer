@@ -79,6 +79,12 @@ class Hit:
 	def __repr__(self):
 		return str(self.__dict__)
 
+	def __hash__(self) -> int:
+		kind_hash = 23 * self.kind.__hash__()
+		section_hash = 17 * self.kind.__hash__()
+		position_hash = 13 * self.position.__hash__()
+		return kind_hash * section_hash * position_hash
+
 
 class ForwardIndexEntry:
 	"""
@@ -142,7 +148,7 @@ class ForwardIndexEntry:
 		try:
 			if self.page_id != o.page_id:
 				return False
-			if self.hits != o.hits:
+			if not self._test_hit_equal(self.hits, o.hits):
 				return False
 		except AttributeError:
 			return False
@@ -153,6 +159,16 @@ class ForwardIndexEntry:
 
 	def __repr__(self) -> str:
 		return str(self.__dict__)
+
+	def _test_hit_equal(self, this_hit, other_hit):
+		for key, value in this_hit.items():
+			if key not in other_hit:
+				return False
+			this_hit_set = set(value)
+			other_hit_set = set(other_hit[key])
+			if this_hit_set != other_hit_set:
+				return False
+		return True
 
 
 class ReverseIndexEntry:
@@ -170,8 +186,8 @@ class ReverseIndexEntry:
 		:return: the object representation.
 		"""
 
-		page_id, hit_length = struct.unpack("!IH", data[:6])
-		data = data[6:]
+		length, page_id, hit_length = struct.unpack("!IIH", data[:10])
+		data = data[10:]
 		hit_list = list()
 		for i in range(hit_length):
 			hit = Hit.unpack(data[:9])
@@ -201,7 +217,9 @@ class ReverseIndexEntry:
 		meta_bytes = struct.pack("!IH", self.page_id, len(self.hits))
 		for hit in self.hits:
 			meta_bytes = meta_bytes + hit.pack()
-		return meta_bytes
+		length = len(meta_bytes)
+		length_bytes = struct.pack("!I", length)
+		return length_bytes + meta_bytes
 
 	def __eq__(self, o: "ReverseIndexEntry") -> bool:
 		try:
@@ -236,8 +254,8 @@ class LexiconEntry:
 		:return: the object representation.
 		"""
 
-		word_id, page_count = struct.unpack("!II", data[:8])
-		data = data[8:]
+		entry_len, word_id, page_count = struct.unpack("!III", data[:12])
+		data = data[12:]
 		format_str = "I" * page_count
 		format_str = "!" + format_str
 		page_list = struct.unpack(format_str, data)
@@ -264,7 +282,9 @@ class LexiconEntry:
 		for i in self.pages:
 			format_str += "I"
 		result = struct.pack(format_str, self.word_id, len(self.pages), *self.pages)
-		return result
+		entry_len = len(result)
+		entry_len_bytes = struct.pack("!I", entry_len)
+		return entry_len_bytes + result
 
 	def __eq__(self, o: "LexiconEntry") -> bool:
 		try:
@@ -393,6 +413,7 @@ class TestReverseEntry(unittest.TestCase):
 		meta_bytes = struct.pack("!IH", reverse_entry.page_id, len(reverse_entry.hits))
 		for hit in reverse_entry.hits:
 			meta_bytes = meta_bytes + hit.pack()
+		meta_bytes = struct.pack("!I", len(meta_bytes)) + meta_bytes
 
 		self.assertEqual(meta_bytes, reverse_entry_bytes, "Reverse entry not packing according to format")
 
@@ -419,6 +440,9 @@ class TestLexiconEntry(unittest.TestCase):
 		for i in lexicon_entry.pages:
 			format_str += "I"
 		expected_bytes = struct.pack(format_str, lexicon_entry.word_id, len(lexicon_entry.pages), *lexicon_entry.pages)
+		length = len(expected_bytes)
+		length_bytes = struct.pack("!I", length)
+		expected_bytes = length_bytes + expected_bytes
 		self.assertEqual(expected_bytes, actual_bytes, "LexiconEntry not packing according to the binary format")
 
 	def test_unpacking(self):
