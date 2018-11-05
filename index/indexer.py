@@ -109,10 +109,10 @@ class WordDictionary:
 		"""
 
 		if not os.path.isfile(self.path):
-			with open(self.path, mode="w"):
+			with open(self.path, mode = "w"):
 				pass
 
-		dictionary_file = open(self.path, mode="r")
+		dictionary_file = open(self.path, mode = "r")
 		try:
 			for line in dictionary_file:
 				dic_entry = WordDictionaryEntry.unpack(line)
@@ -129,7 +129,7 @@ class WordDictionary:
 		:return: None.
 		"""
 
-		dictionary_file = open(self.path, mode="w")
+		dictionary_file = open(self.path, mode = "w")
 		try:
 			for entry in self._dictionary.values():
 				dictionary_file.write(entry.pack() + '\n')
@@ -163,7 +163,7 @@ class ForwardIndex:
 	Hit that describes the kind of hit and the location of the hit.
 	"""
 
-	def __init__(self, word_dic, index_dir="index"):
+	def __init__(self, word_dic, index_dir = "index"):
 		"""
 		creates a new forward entry with the index path and word dictionary.
 		:param word_dic: the word dictionary to map words
@@ -174,7 +174,7 @@ class ForwardIndex:
 		self._word_dic = word_dic
 		self._forward_index_path = index_dir + "/forward_index"
 		self._forward_index_map_path = index_dir + "/forward_index_map"
-		self._forward_index = open(self._forward_index_path, mode="ab+")
+		self._forward_index = open(self._forward_index_path, mode = "ab+")
 		self._index_size = os.path.getsize(self._forward_index_path)
 		self._position_mapping = dict()
 
@@ -339,7 +339,7 @@ class ReverseIndex:
 	A reverse index that maps a word to documents. Each document contains a hit list that are hits of the mapping word.
 	"""
 
-	def __init__(self, index_dir="index"):
+	def __init__(self, index_dir = "index"):
 		"""
 		creates a new ReverseIndex at the specified index directory.
 		:param index_dir: the directory that the ReverseIndex will reside in.
@@ -509,7 +509,7 @@ class Indexer:
 	The Anatomy of a Large-Scale Hypertextual Web Search Engine. Currently, it is not thread safe.
 	"""
 
-	def __init__(self, index_dir="index", dampener=0.8):
+	def __init__(self, index_dir = "index", dampener = 0.8):
 		"""
 		creates a new Indexer specifying index directory and weight dampener.
 		:param index_dir: the directory of the indexes.
@@ -578,7 +578,7 @@ class Indexer:
 		pages = self._reverse_index.get_page_ids(keyword_id)
 		ranked_pages = {page_id: self._page_rank(page_id) for page_id in pages}
 		sorted_pages = []
-		for key, item in sorted(ranked_pages.items(), key=lambda entry: entry[1], reverse=True):
+		for key, item in sorted(ranked_pages.items(), key = lambda entry: entry[1], reverse = True):
 			sorted_pages.append(key)
 		return sorted_pages
 
@@ -639,8 +639,8 @@ class TestForwardIndex(unittest.TestCase):
 		anchors = [Anchor("Example", "https://www.example.com")]
 		headers = ["Go to example"]
 		texts = ["Go with example"]
-		page = PageDocument(doc_id=1, title="Test Page", checksum="12345", url="https://www.test.com",
-		                    anchors=anchors, texts=texts, headers=headers)
+		page = PageDocument(doc_id = 1, title = "Test Page", checksum = "12345", url = "https://www.test.com",
+		                    anchors = anchors, texts = texts, headers = headers)
 		forward_index = ForwardIndex(word_dictionary, "index")
 		try:
 			forward_index.load()
@@ -721,20 +721,20 @@ class TestIndexer(unittest.TestCase):
 	def create_simple_multipage_data():
 		headers1 = ["Page 1 test"]
 		texts1 = "This should be the highest ranked by page rank", "Welcome to page 1"
-		page1 = PageDocument(doc_id=3, title="Page 1", checksum="12345", url="https://www.page1.com",
-		                     texts=texts1, headers=headers1)
+		page1 = PageDocument(doc_id = 3, title = "Page 1", checksum = "12345", url = "https://www.page1.com",
+		                     texts = texts1, headers = headers1)
 
 		headers2 = ["Page 2 test", "References"]
 		texts2 = "This should be the second ranked by page rank", "Welcome to page 2", "Page one is great"
 		anchors2 = [Anchor("Page 1", "https://www.page1.com")]
-		page2 = PageDocument(doc_id=1, title="Page 2", checksum="67890", url="https://www.page2.com",
-		                     texts=texts2, anchors=anchors2, headers=headers2)
+		page2 = PageDocument(doc_id = 1, title = "Page 2", checksum = "67890", url = "https://www.page2.com",
+		                     texts = texts2, anchors = anchors2, headers = headers2)
 
 		headers3 = ["Page 3 test", "References"]
 		texts3 = "This should be the third ranked by page rank", "Welcome to page 3", "Page two is great", "Page one is great"
 		anchors3 = [Anchor("Page 2", "https://www.page2.com"), Anchor("Page 1", "https://www.page1.com")]
-		page3 = PageDocument(doc_id=2, title="Page 3", checksum="09876", url="https://www.page3.com",
-		                     texts=texts3, anchors=anchors3, headers=headers3)
+		page3 = PageDocument(doc_id = 2, title = "Page 3", checksum = "09876", url = "https://www.page3.com",
+		                     texts = texts3, anchors = anchors3, headers = headers3)
 		return page1, page2, page3
 
 	def test_single_entry(self):
@@ -742,8 +742,8 @@ class TestIndexer(unittest.TestCase):
 		anchors = Anchor("Example", "https://www.example.com"), Anchor("Facebook", "https://www.facebook.com")
 		headers = "Go to example", "Like on facebook"
 		texts = "This is a page used to test the indexer", "If you like this page, like on Facebook"
-		page = PageDocument(doc_id=1, title="Test Page", checksum="12345", url="https://www.test.com",
-		                    anchors=anchors, texts=texts, headers=headers)
+		page = PageDocument(doc_id = 1, title = "Test Page", checksum = "12345", url = "https://www.test.com",
+		                    anchors = anchors, texts = texts, headers = headers)
 		indexer.index(page)
 		query_result = indexer.search_by_keywords("test")
 		self.assertEqual(1, len(query_result), "search_by_keywords did not return the single page that it should match")
@@ -764,8 +764,8 @@ class TestIndexer(unittest.TestCase):
 
 	def test_persistence(self):
 		indexer = self.load_indexer()
-		page = PageDocument(doc_id=1, title="Test persistence", checksum="3782",
-		                    url="https://www.test-persistence.com")
+		page = PageDocument(doc_id = 1, title = "Test persistence", checksum = "3782",
+		                    url = "https://www.test-persistence.com")
 		indexer.index(page)
 		indexer.close()
 		indexer = self.load_indexer()
@@ -835,9 +835,9 @@ class TestFileBinarySearch(unittest.TestCase):
 			return -1
 
 	def test_regular_binary_search(self):
-		with open("test_regular", mode="wb") as file:
+		with open("test_regular", mode = "wb") as file:
 			file.write(b"abcdefg")
-		with open("test_regular", mode="rb") as file:
+		with open("test_regular", mode = "rb") as file:
 			is_found, target, position = file_binary_search(file, b'f', TestFileBinarySearch.alphebet_comparator, 1, 0,
 			                                                7)
 			self.assertTrue(is_found, "Binary search failed to find")
@@ -845,9 +845,9 @@ class TestFileBinarySearch(unittest.TestCase):
 			self.assertEqual(5, position, "Binary search failed to find the correct position")
 
 	def test_one_entry_binary_search(self):
-		with open("test_one_entry", mode="wb") as file:
+		with open("test_one_entry", mode = "wb") as file:
 			file.write(b"a")
-		with open("test_one_entry", mode="rb") as file:
+		with open("test_one_entry", mode = "rb") as file:
 			is_found, target, position = file_binary_search(file, b'a', TestFileBinarySearch.alphebet_comparator, 1, 0,
 			                                                1)
 			self.assertTrue(is_found, "Binary search failed to find")
@@ -855,9 +855,9 @@ class TestFileBinarySearch(unittest.TestCase):
 			self.assertEqual(0, position, "Binary search failed to find the correct position")
 
 	def test_not_found_binary_search(self):
-		with open("test_not_found", mode="wb") as file:
+		with open("test_not_found", mode = "wb") as file:
 			file.write(b"abcdefgijk")
-		with open("test_not_found", mode="rb") as file:
+		with open("test_not_found", mode = "rb") as file:
 			is_found, target, position = file_binary_search(file, b'h', TestFileBinarySearch.alphebet_comparator, 1, 0,
 			                                                10)
 			self.assertFalse(is_found, "Binary search false positive")
