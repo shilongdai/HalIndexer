@@ -1,3 +1,7 @@
+"""
+This module if ran takes input from a rabbitmq queue and index it.
+"""
+
 import atexit
 import json
 
