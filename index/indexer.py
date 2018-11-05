@@ -520,6 +520,7 @@ class TestIndexer(unittest.TestCase):
 		query_result = indexer.search_by_keywords("persistence")
 		self.assertEqual(1, len(query_result), "Failed to persist")
 		self.assertEqual(1, query_result[0], "Failed to maintain integrity")
+		indexer.close()
 
 	def tearDown(self):
 		shutil.rmtree("index")
