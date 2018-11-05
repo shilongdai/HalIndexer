@@ -5,11 +5,22 @@ import unittest
 
 
 def dump_dictionary(dictionary, text_file):
+	"""
+	serializes a dictionary to a text file in json format.
+	:param dictionary: the dictionary to serialize
+	:param text_file: the text file to dump to.
+	:return: None
+	"""
 	with open(text_file, "w") as dump_file:
 		json.dump(dictionary, dump_file)
 
 
 def load_dictionary(text_file):
+	"""
+	loads a dictionary dumped by dump_dictionary from a text file.
+	:param text_file: the text file to load.
+	:return: the dictionary.
+	"""
 	if not os.path.isfile(text_file):
 		return dict()
 	with open(text_file, "r") as read_file:
@@ -304,9 +315,18 @@ class LexiconEntry:
 
 
 class DictionaryEntry:
+	"""
+	A simple dictionary entry in the format of key:entry. This class is mostly used by the WordDictionary to store word:id pairs.
+	"""
 
 	@classmethod
 	def unpack(cls, data):
+		"""
+		unpacks an entry in the format of key:entry to a DictionaryEntry.
+		:param data: the text entry.
+		:return: the unpacked entry.
+		"""
+
 		parts = data.split(":")
 		key = parts[0]
 		for i in parts[1:-1]:
@@ -315,10 +335,21 @@ class DictionaryEntry:
 		return cls(key, value)
 
 	def __init__(self, key, value):
+		"""
+		creates a new DictionaryEntry by specifying the key:value pair.
+		:param key: the key of the entry.
+		:param value: the value of the entry.
+		"""
+
 		self.key = str(key)
 		self.value = str(value)
 
 	def pack(self):
+		"""
+		packs this entry to the key:entry pair format.
+		:return: a string in the format of key:entry.
+		"""
+
 		return self.key + ":" + self.value
 
 	def __eq__(self, o: "DictionaryEntry") -> bool:
@@ -339,24 +370,49 @@ class DictionaryEntry:
 
 
 class WordDictionaryEntry(DictionaryEntry):
+	"""
+	A DictionaryEntry that stores word and word_id for WordDictionary.
+	"""
 
 	def __init__(self, word, word_id):
 		DictionaryEntry.__init__(self, word, word_id)
 
 	@property
 	def word(self):
+		"""
+		gets the word represented by the entry.
+		:return: the word.
+		"""
+
 		return self.key
 
 	@word.setter
 	def word(self, word):
+		"""
+		sets the word represented by the entry.
+		:param word: the word
+		:return: None.
+		"""
+
 		self.key = word
 
 	@property
 	def word_id(self):
+		"""
+		gets the word id mapped by this entry.
+		:return: the word id.
+		"""
+
 		return int(self.value)
 
 	@word_id.setter
 	def word_id(self, word_id):
+		"""
+		sets the word id mapped by this entry.
+		:param word_id: the word id.
+		:return: None
+		"""
+
 		self.value = word_id
 
 

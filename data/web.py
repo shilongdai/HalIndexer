@@ -3,7 +3,7 @@ class PageDocument:
 	A data class representing the information crawled from a web page.
 	"""
 
-	def __init__(self, doc_id = 0, title = "", checksum = "", url = "", html="", anchors = (), texts = (), headers = ()):
+	def __init__(self, doc_id=0, title="", checksum="", url="", html="", anchors=(), texts=(), headers=()):
 		"""
 		creates a new PageDocument
 		:param doc_id: the id of the document in the main repository.
@@ -30,6 +30,10 @@ class PageDocument:
 
 
 class Anchor:
+	"""
+	A data class representing the anchor on a webpage.
+	"""
+
 	def __init__(self, text, url):
 		self.text = text
 		self.url = url
