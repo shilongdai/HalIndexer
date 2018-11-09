@@ -2,7 +2,6 @@
 This module if ran takes input from a rabbitmq queue and index it.
 """
 
-import atexit
 import json
 
 import pika
@@ -43,5 +42,9 @@ if __name__ == "__main__":
 	channel = connection.channel()
 	channel.queue_declare(queue = "crawledQueue", durable = True)
 	channel.basic_consume(handle_crawled_data, queue = "crawledQueue")
-	channel.start_consuming()
-	atexit.register(cleanup)
+	try:
+		channel.start_consuming()
+	except KeyboardInterrupt:
+		cleanup()
+		channel.close()
+		connection.close()

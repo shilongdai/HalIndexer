@@ -72,18 +72,33 @@ def merge_list_dictionaries(dictionaries):
 
 def stripe_enclosing_punctuation(target: str):
 	"""
-	removes punctuations around a string.
+	removes punctuations around a string. If the string is all punctuation, then do nothing.
 	:param target: the string to filter.
-	:return: a new string without the surrounding punctuations.
+	:return: a new string without the surrounding punctuations. Or, if the string is all punctuation, the original string.
 	"""
 
 	if len(target) == 0:
 		return target
 	lower_bound, upper_bound = 0, len(target)
-	if target[0] in string.punctuation:
-		lower_bound += 1
-	if target[-1] in string.punctuation:
-		upper_bound -= 1
+	acceptable_characters = string.ascii_letters + string.digits
+	# check from beginning
+	index = 0
+	while index < len(target):
+		if target[index] not in acceptable_characters:
+			lower_bound += 1
+			index += 1
+		else:
+			break
+	# check from end
+	index = len(target) - 1
+	while index >= 0:
+		if target[index] not in acceptable_characters:
+			upper_bound -= 1
+			index -= 1
+		else:
+			break
+	if upper_bound <= lower_bound:
+		return target
 	return target[lower_bound:upper_bound]
 
 
@@ -503,13 +518,36 @@ class ReverseIndex:
 		return result
 
 
+class SearchResult:
+
+	def __init__(self, page_id, page_rank):
+		self.page_id = page_id
+		self.page_rank = page_rank
+
+	def __eq__(self, o: "SearchResult") -> bool:
+		try:
+			if self.page_rank != o.page_rank:
+				return False
+			if self.page_id != o.page_id:
+				return False
+			return True
+		except AttributeError:
+			return False
+
+	def __ne__(self, o: "SearchResult") -> bool:
+		return not self.__eq__(o)
+
+	def __repr__(self) -> str:
+		return str(self.__dict__)
+
+
 class Indexer:
 	"""
 	A indexer that accepts page information from a web crawler and index it based on the idea presented in the paper
 	The Anatomy of a Large-Scale Hypertextual Web Search Engine. Currently, it is not thread safe.
 	"""
 
-	def __init__(self, index_dir = "index", dampener = 0.8):
+	def __init__(self, index_dir = "index", dampener = 0.8, page_rank_iteration = 100):
 		"""
 		creates a new Indexer specifying index directory and weight dampener.
 		:param index_dir: the directory of the indexes.
@@ -520,6 +558,7 @@ class Indexer:
 			os.mkdir(index_dir)
 		self.index_dir = index_dir
 		self._dampener = dampener
+		self._page_rank_iteration = page_rank_iteration
 		self._word_dictionary_path = index_dir + "/word_dict"
 		self._link_out_path = index_dir + "/link_out"
 		self._references_tracker_path = index_dir + "/reference_count"
@@ -532,6 +571,7 @@ class Indexer:
 		self._references_tracker = dict()
 		self._url_page_id_mapper = dict()
 		self._page_id_url_mapper = dict()
+		self._page_rank_mapper = dict()
 
 	def load(self):
 		"""
@@ -542,10 +582,11 @@ class Indexer:
 		self._word_dictionary.load()
 		self._forward_index.load()
 		self._reverse_index.load()
-		self._link_out_counts = load_dictionary(self._link_out_path)
-		self._references_tracker = load_dictionary(self._references_tracker_path)
-		self._url_page_id_mapper = load_dictionary(self._url_mapper_path)
-		self._page_id_url_mapper = load_dictionary(self._page_id_mapper_path)
+		self._link_out_counts = load_dictionary(self._link_out_path, value_converter = int, key_converter = int)
+		self._references_tracker = load_dictionary(self._references_tracker_path,
+		                                           value_converter = self._str_list_to_int_list)
+		self._url_page_id_mapper = load_dictionary(self._url_mapper_path, value_converter = int)
+		self._page_id_url_mapper = load_dictionary(self._page_id_mapper_path, key_converter = int)
 
 	def index(self, data):
 		"""
@@ -574,12 +615,16 @@ class Indexer:
 		:return: the result sorted by pagerank and keywords.
 		"""
 
+		# assign default page rank to all sites
+		for page_id in self._page_id_url_mapper:
+			self._page_rank_mapper[page_id] = 1 - self._dampener
+		self._calculate_page_rank()
 		keyword_id = self._word_dictionary.get_word_id(keywords)
 		pages = self._reverse_index.get_page_ids(keyword_id)
-		ranked_pages = {page_id: self._page_rank(page_id) for page_id in pages}
+		ranked_pages = {page_id: self._page_rank_mapper[page_id] for page_id in pages}
 		sorted_pages = []
 		for key, item in sorted(ranked_pages.items(), key = lambda entry: entry[1], reverse = True):
-			sorted_pages.append(key)
+			sorted_pages.append(SearchResult(key, item))
 		return sorted_pages
 
 	def close(self):
@@ -594,37 +639,32 @@ class Indexer:
 		dump_dictionary(self._link_out_counts, self._link_out_path)
 		dump_dictionary(self._references_tracker, self._references_tracker_path)
 		dump_dictionary(self._url_page_id_mapper, self._url_mapper_path)
+		dump_dictionary(self._page_id_url_mapper, self._page_id_mapper_path)
 
-	def _page_rank(self, page_id):
+	@staticmethod
+	def _str_list_to_int_list(str_list):
 		"""
-		calculates the page rank of a page id recursively.
-		:param page_id: the page id of the page to calculate pagerank for.
-		:return: the page rank value.
+		converts a list of string to a list of int
+		:param str_list: the list of string
+		:return: a list of int from the list of string.
 		"""
+		result = [int(i) for i in str_list]
+		return result
 
-		return self._page_rank_recursive(page_id, dict())
-
-	def _page_rank_recursive(self, page_id, tracker):
+	def _calculate_page_rank(self):
 		"""
-		the recursive function that calculates page rank.
-		:param page_id: the page id to calculate pagerank for.
-		:param tracker: a dictionary that tracks existing page ranks so that the recursion stops eventually.
-		:return: the calculated page rank of the given page id.
+		calculates page rank iteratively.
+		:return: None
 		"""
-
-		if page_id in tracker:
-			return tracker[page_id]
-		rand_probability = 1 - self._dampener
-		link_probability = 0
-		if page_id not in self._page_id_url_mapper:
-			return rand_probability
-		url = self._page_id_url_mapper[page_id]
-		for page in self._references_tracker.get(url, []):
-			link_probability = link_probability + (
-					self._page_rank_recursive(page, tracker) / self._link_out_counts[page])
-		page_rank = rand_probability + link_probability
-		tracker[page_id] = page_rank
-		return page_rank
+		for i in range(self._page_rank_iteration):
+			for page in self._page_rank_mapper:
+				link_weight = 0
+				random_weight = 1 - self._dampener
+				page_url = self._page_id_url_mapper[page]
+				for referenced_page in self._references_tracker.get(page_url, []):
+					link_weight += self._page_rank_mapper[referenced_page] / self._link_out_counts[referenced_page]
+				link_weight = self._dampener * link_weight
+				self._page_rank_mapper[page] = random_weight + link_weight
 
 
 class TestForwardIndex(unittest.TestCase):
@@ -747,7 +787,7 @@ class TestIndexer(unittest.TestCase):
 		indexer.index(page)
 		query_result = indexer.search_by_keywords("test")
 		self.assertEqual(1, len(query_result), "search_by_keywords did not return the single page that it should match")
-		self.assertEqual(1, query_result[0], "search_by_keywords did not maintain the id")
+		self.assertEqual(1, query_result[0].page_id, "search_by_keywords did not maintain the id")
 		indexer.close()
 
 	def test_multiple_entry_with_single_word_query(self):
@@ -757,9 +797,9 @@ class TestIndexer(unittest.TestCase):
 			indexer.index(page)
 		query_result = indexer.search_by_keywords("Page")
 		self.assertEqual(3, len(query_result), "search_by_keywords did not return the pages that it should match")
-		self.assertEqual(3, query_result[0], "The page Page 1 should be ranked first")
-		self.assertEqual(1, query_result[1], "The page Page 2 should be ranked second")
-		self.assertEqual(2, query_result[2], "The page Page 3 should be ranked third")
+		self.assertEqual(3, query_result[0].page_id, "The page Page 1 should be ranked first")
+		self.assertEqual(1, query_result[1].page_id, "The page Page 2 should be ranked second")
+		self.assertEqual(2, query_result[2].page_id, "The page Page 3 should be ranked third")
 		indexer.close()
 
 	def test_persistence(self):
@@ -771,7 +811,7 @@ class TestIndexer(unittest.TestCase):
 		indexer = self.load_indexer()
 		query_result = indexer.search_by_keywords("persistence")
 		self.assertEqual(1, len(query_result), "Failed to persist")
-		self.assertEqual(1, query_result[0], "Failed to maintain integrity")
+		self.assertEqual(1, query_result[0].page_id, "Failed to maintain integrity")
 		indexer.close()
 
 	def tearDown(self):

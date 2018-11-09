@@ -15,16 +15,20 @@ def dump_dictionary(dictionary, text_file):
 		json.dump(dictionary, dump_file)
 
 
-def load_dictionary(text_file):
+def load_dictionary(text_file, key_converter = str, value_converter = str):
 	"""
 	loads a dictionary dumped by dump_dictionary from a text file.
 	:param text_file: the text file to load.
+	:param key_converter: the converter to convert the key to the right type from string
+	:param value_converter: the converter to convert the value to the right type from string
 	:return: the dictionary.
 	"""
 	if not os.path.isfile(text_file):
 		return dict()
 	with open(text_file, "r") as read_file:
-		return json.load(read_file)
+		buffer = json.load(read_file)
+		result = {key_converter(key): value_converter(value) for key, value in buffer.items()}
+		return result
 
 
 class Hit:
