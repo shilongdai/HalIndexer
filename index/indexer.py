@@ -1,56 +1,48 @@
 import os
 import shutil
 import string
-import struct
 import unittest
 
-from sortedcontainers import SortedList
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
 
 from data.web import Anchor
 from data.web import PageDocument
+from index.entry import Base
 from index.entry import ForwardIndexEntry
+from index.entry import ForwardMapper
 from index.entry import Hit
-from index.entry import LexiconEntry
+from index.entry import LexiconMapper
+from index.entry import PageHitMapper
 from index.entry import ReverseIndexEntry
 from index.entry import WordDictionaryEntry
+from index.entry import WordHitMapper
 from index.entry import dump_dictionary
 from index.entry import load_dictionary
+from index.exceptions import ForwardMappingPersistException
+from index.exceptions import HitListPersistException
+from index.exceptions import LexiconMappingPersistException
+from index.exceptions import PageHitMappingPersistException
+
+Session = sessionmaker()
+engine = None
 
 
-def file_binary_search(file, target, comparator, entry_size, start, end):
-	"""
-	performs a recursive binary search on a file for a specific entry of bytes.
-	:param file: the file to search.
-	:param target: the target entry.
-	:param comparator: the compare function that compares the target to bytes representing an entry.
-	:param entry_size: the size of a single entry.
-	:param start: the start position, inclusive.
-	:param end: the end position, exclusive.
-	:return: whether the entry was found, the bytes of the entry found if found, the position of the found entry
-	or where it should be.
-	"""
+def configure(connection_string):
+	global engine
+	global Session
+	engine = create_engine(connection_string)
+	Session.configure(bind = engine)
 
-	# seek to middle
-	difference = end - start
-	if difference % entry_size != 0:
-		raise ValueError("The range start-end must be divisible by entry_size")
-	if difference == 0:
-		return False, None, start
-	entry_count = difference // entry_size
-	middle_count = entry_count // 2
-	seek_position = start + (entry_size * middle_count)
-	file.seek(seek_position, 0)
-	entry = file.read(entry_size)
-	# compare the target to the seeked entry
-	comparison_result = comparator(target, entry)
 
-	# do recursive binary search
-	if comparison_result == 0:
-		return True, entry, seek_position
-	if comparison_result > 0:
-		return file_binary_search(file, target, comparator, entry_size, seek_position + entry_size, end)
-	else:
-		return file_binary_search(file, target, comparator, entry_size, start, seek_position)
+def cleanup():
+	global Session
+	if Session is not None:
+		Session.close_all()
+	if engine is not None:
+		engine.dispose()
+	Session = sessionmaker()
 
 
 def merge_list_dictionaries(dictionaries):
@@ -107,49 +99,15 @@ class WordDictionary:
 	A dictionary of words that maps a single word to a word_id. The mapping of words are persisted in a text file.
 	"""
 
-	def __init__(self, path):
-		"""
-		creates a new word dictionary specifying the path to the persistence text file.
-		:param path: the path to the text file.
-		"""
-
-		self.path = path
-		self._dictionary = dict()
-		self.current_id = 0
-
-	def load(self):
-		"""
-		loads this dictionary from the text file specified by the path.
-		:return: None.
-		"""
-
-		if not os.path.isfile(self.path):
-			with open(self.path, mode = "w"):
-				pass
-
-		dictionary_file = open(self.path, mode = "r")
-		try:
-			for line in dictionary_file:
-				dic_entry = WordDictionaryEntry.unpack(line)
-				self._dictionary[dic_entry.word] = dic_entry
-				if dic_entry.word_id > self.current_id:
-					self.current_id = dic_entry.word_id
-		finally:
-			dictionary_file.close()
-			self.current_id += 1
+	def __init__(self):
+		self._session = Session()
 
 	def close(self):
 		"""
-		cleans up all resources and writes the entries to the text file.
+		cleans up all resources.
 		:return: None.
 		"""
-
-		dictionary_file = open(self.path, mode = "w")
-		try:
-			for entry in self._dictionary.values():
-				dictionary_file.write(entry.pack() + '\n')
-		finally:
-			dictionary_file.close()
+		self._session.close()
 
 	def get_word_id(self, word):
 		"""
@@ -161,15 +119,18 @@ class WordDictionary:
 
 		word = stripe_enclosing_punctuation(word.rstrip())
 		word = word.lower()
-		if word in self._dictionary:
-			return self._dictionary[word].word_id
-		dic_entry = WordDictionaryEntry(word, self.current_id)
-		self.current_id += 1
-		self._dictionary[dic_entry.word] = dic_entry
-		return dic_entry.word_id
+		query = self._session.query(WordDictionaryEntry).filter(WordDictionaryEntry.word == word)
+		word_entry = query.one_or_none()
+		if word_entry is not None:
+			return word_entry.word_id
+		else:
+			return self.add_word(word)
 
 	def add_word(self, word):
-		self.get_word_id(word)
+		word_entry = WordDictionaryEntry(word)
+		self._session.add(word_entry)
+		self._session.commit()
+		return word_entry.word_id
 
 
 class ForwardIndex:
@@ -178,28 +139,13 @@ class ForwardIndex:
 	Hit that describes the kind of hit and the location of the hit.
 	"""
 
-	def __init__(self, word_dic, index_dir = "index"):
+	def __init__(self, word_dic):
 		"""
-		creates a new forward entry with the index path and word dictionary.
+		creates a new forward entry with word dictionary.
 		:param word_dic: the word dictionary to map words
-		:param index_dir: the directory where the indexes would be stored.
 		"""
-
-		self.index_dir = index_dir
 		self._word_dic = word_dic
-		self._forward_index_path = index_dir + "/forward_index"
-		self._forward_index_map_path = index_dir + "/forward_index_map"
-		self._forward_index = open(self._forward_index_path, mode = "ab+")
-		self._index_size = os.path.getsize(self._forward_index_path)
-		self._position_mapping = dict()
-
-	def load(self):
-		"""
-		loads the index from the files.
-		:return: None.
-		"""
-
-		self._position_mapping = load_dictionary(self._forward_index_map_path)
+		self._session = Session()
 
 	def index(self, data):
 		"""
@@ -225,48 +171,61 @@ class ForwardIndex:
 		:param page_id: the page id of the ForwardIndexEntry.
 		:return: the ForwardIndexEntry or None if it doesn't exist.
 		"""
-
-		if page_id not in self._position_mapping:
+		result = self._read_forward_entry(page_id)
+		if len(result.hits) == 0:
 			return None
-		position = self._position_mapping[page_id]
-		self._forward_index.seek(position, 0)
-		return self._read_forward_entry(self._forward_index)
+		return result
 
 	def close(self):
 		"""
 		cleans up any resources and write any changes to file if necessary.
 		:return: None.
 		"""
-
-		dump_dictionary(self._position_mapping, self._forward_index_map_path)
-		self._forward_index.close()
+		self._session.close()
 
 	def _write_forward_entry(self, entry):
 		"""
-		writes a ForwardIndexEntry to the end of the forward index file.
+		writes a ForwardIndexEntry to the database.
 		:param entry: the entry to write.
 		:return: None.
 		"""
+		for word_id, hit_list in entry.hits.items():
+			try:
+				self._write_hits(hit_list)
+			except SQLAlchemyError as e:
+				self._session.rollback()
+				raise HitListPersistException(entry.page_id) from e
+			forward_mapper = ForwardMapper(entry.page_id, word_id)
+			try:
+				for hit in hit_list:
+					word_hit_mapper = WordHitMapper(word_id, hit.id)
+					self._session.add(word_hit_mapper)
+				self._session.add(forward_mapper)
+				self._session.commit()
+			except SQLAlchemyError as e:
+				self._session.rollback()
+				raise ForwardMappingPersistException(entry.page_id) from e
 
-		forward_binary = entry.pack()
-		size = len(forward_binary)
-		size_byte = struct.pack("!I", size)
-		data = size_byte + forward_binary
-		self._forward_index.write(data)
-		self._position_mapping[entry.page_id] = self._index_size
-		self._index_size += len(data)
+	def _write_hits(self, hits):
+		self._session.add_all(hits)
+		self._session.flush()
 
-	def _read_forward_entry(self, file):
+	def _read_forward_entry(self, page_id):
 		"""
-		reads a ForwardIndexEntry from a file seeked to the beginning of the entry to read.
-		:param file: the seeked file.
+		reads a ForwardIndexEntry identified by a page id.
+		:param page_id: the page id of the entry
 		:return: the read ForwardIndexEntry.
 		"""
-
-		metabytes = file.read(4)
-		size = struct.unpack("!I", metabytes)
-		data_bytes = file.read(size[0])
-		return ForwardIndexEntry.unpack(data_bytes)
+		word_ids = self._session.query(ForwardMapper.word_id).filter(ForwardMapper.page_id == page_id).all()
+		hit_dict = {}
+		for word_id in word_ids:
+			hit_ids = self._session.query(WordHitMapper.hit_id).filter(WordHitMapper.word_id == word_id[0]).all()
+			hit_ids = [hit_id_tuple[0] for hit_id_tuple in hit_ids]
+			hits = self._session.query(Hit).filter(Hit.id.in_(hit_ids)).all()
+			hit_dict[word_id[0]] = hits
+		result = ForwardIndexEntry(page_id)
+		result.hits = hit_dict
+		return result
 
 	def _title_to_hits(self, title):
 		"""
@@ -354,26 +313,11 @@ class ReverseIndex:
 	A reverse index that maps a word to documents. Each document contains a hit list that are hits of the mapping word.
 	"""
 
-	def __init__(self, index_dir = "index"):
+	def __init__(self):
 		"""
-		creates a new ReverseIndex at the specified index directory.
-		:param index_dir: the directory that the ReverseIndex will reside in.
+		creates a new ReverseIndex.
 		"""
-
-		self.index_dir = index_dir
-		self._reverse_index_path = index_dir + "/reverse_indexes"
-		self._lexicon_path = index_dir + "/lexicon"
-		self._lexicon = dict()
-
-	def load(self):
-		"""
-		loads the ReverseIndex from the directory.
-		:return: None.
-		"""
-
-		if not os.path.isdir(self._reverse_index_path):
-			os.mkdir(self._reverse_index_path)
-		self._load_lexicon()
+		self._session = Session()
 
 	def index(self, forward_entry):
 		"""
@@ -382,27 +326,40 @@ class ReverseIndex:
 		:return: all the reverse entries that came from the forward entry in the form of a dictionary with
 		word id -> ReverseIndexEntry.
 		"""
+		for word_id, hit_list in forward_entry.hits.items():
+			try:
+				page_hit_mappers = self._write_hit_list_mapping(forward_entry.page_id, hit_list)
+			except SQLAlchemyError as e:
+				self._session.rollback()
+				raise PageHitMappingPersistException(word_id) from e
+			try:
+				for page_hit in page_hit_mappers:
+					lexicon_mapper = LexiconMapper(word_id, page_hit.id)
+					self._session.add(lexicon_mapper)
+				self._session.commit()
+			except SQLAlchemyError as e:
+				self._session.rollback()
+				raise LexiconMappingPersistException(word_id) from e
 
-		reverse_entries = self._convert_to_reverse_indexes(forward_entry)
-		for word_id, entries in reverse_entries.items():
-			file_id = self._reverse_index_path + "/" + str(word_id)
-			with open(file_id, "ab+") as reverse_index_file:
-				for e in entries:
-					reverse_index_file.write(e.pack())
-		self._add_to_lexicon(reverse_entries)
-		return reverse_entries
-
-	def get_entries(self, word_id):
+	def get_entry(self, word_id):
 		"""
 		gets all reverse entries that are mapped by the specified word.
 		:param word_id: the word id to search for.
 		:return: ReverseIndexEntry mapped by this word id.
 		"""
-
-		entries = self._load_reverse_entries(word_id)
-		for entry in entries:
-			entry.word_id = word_id
-		return entries
+		entry_ids = [result[0] for result in
+		             self._session.query(LexiconMapper.page_hit_mapper_id).filter(LexiconMapper.word_id == word_id)]
+		page_hit_mappers = self._session.query(PageHitMapper).filter(PageHitMapper.id.in_(entry_ids)).all()
+		page_dict = {}
+		for page_hit_mapper in page_hit_mappers:
+			if page_hit_mapper.page_id not in page_dict:
+				page_dict[page_hit_mapper.page_id] = []
+			hit = self._session.query(Hit).filter(Hit.id == page_hit_mapper.hit_id).one_or_none()
+			if hit is not None:
+				page_dict[page_hit_mapper.page_id].append(hit)
+		result = ReverseIndexEntry(word_id)
+		result.pages = page_dict
+		return result
 
 	def get_page_ids(self, word_id):
 		"""
@@ -410,112 +367,23 @@ class ReverseIndex:
 		:param word_id: the word id to search for.
 		:return: all page ids referenced by this word id.
 		"""
-
-		return self._lexicon.get(word_id, [])
+		reverse_entry = self.get_entry(word_id)
+		return reverse_entry.pages.keys()
 
 	def close(self):
 		"""
 		clean up all resources and write any changes to file.
 		:return: None.
 		"""
+		self._session.close()
 
-		self._write_lexicon()
-
-	def _convert_to_reverse_indexes(self, forward_entry):
-		"""
-		converts a ForwardIndexEntry to a mapping of word id to ReverseIndexEntry.
-		:param forward_entry: the forward entry to convert.
-		:return: a mapping of word id -> ReverseIndexEntry.
-		"""
-
-		result = dict()
-		for word_id, hit_list in forward_entry.hits.items():
-			if word_id not in result:
-				result[word_id] = []
-			entry = ReverseIndexEntry(word_id, forward_entry.page_id)
-			entry.hits.extend(hit_list)
-			result[word_id].append(entry)
-		return result
-
-	def _add_to_lexicon(self, reverse_entries):
-		"""
-		adds a mapping of reverse entries to the Lexicon according to the word id.
-		:param reverse_entries: the reverse entries mapping to add
-		:return: None.
-		"""
-
-		for word_id, entries in reverse_entries.items():
-			for e in entries:
-				self._insert_to_lexicon(word_id, e.page_id)
-
-	def _insert_to_lexicon(self, word_id, page_id):
-		"""
-		inserts a page to the lexicon.
-		:param word_id: the word that the page contains.
-		:param page_id: the id of the page.
-		:return: None.
-		"""
-
-		if word_id not in self._lexicon:
-			self._lexicon[word_id] = SortedList()
-		self._lexicon[word_id].add(page_id)
-
-	def _load_lexicon(self):
-		"""
-		loads all entries from the lexicon file.
-		:return: None.
-		"""
-
-		if not os.path.isfile(self._lexicon_path):
-			with open(self._lexicon_path, "w"):
-				pass
-		with open(self._lexicon_path, "rb") as lexicon_file:
-			lexicon_data = lexicon_file.read()
-			start = 0
-			end = len(lexicon_data)
-			while start < end:
-				entry_len = struct.unpack("!I", lexicon_data[start: start + 4])
-				entry = LexiconEntry.unpack(lexicon_data[start:start + entry_len[0] + 4])
-				start += entry_len[0]
-				start += 4
-				for page in entry.pages:
-					self._insert_to_lexicon(entry.word_id, page)
-
-	def _write_lexicon(self):
-		"""
-		writes all of the the Lexicon in memory to file.
-		:return: None.
-		"""
-
-		with open(self._lexicon_path, "ab") as lexicon_file:
-			for word_id, pages in self._lexicon.items():
-				entry = LexiconEntry(word_id)
-				entry.pages.extend(pages)
-				lexicon_file.write(entry.pack())
-
-	def _load_reverse_entries(self, word_id):
-		"""
-		load all reverse entries mapped by the specified word.
-		:param word_id: the id of the word.
-		:return: a list of ReverseIndexEntry.
-		"""
-
-		path_to_entries = self._reverse_index_path + "/" + str(word_id)
-		if not os.path.isfile(path_to_entries):
-			with open(path_to_entries, "w"):
-				pass
-		result = []
-		with open(path_to_entries, "rb") as reverse_file:
-			data = reverse_file.read()
-			start = 0
-			end = len(data)
-			while start < end:
-				entry_len = struct.unpack("!I", data[start: start + 4])
-				entry = ReverseIndexEntry.unpack(data[start:start + entry_len[0] + 4])
-				start += entry_len[0]
-				start += 4
-				result.append(entry)
-		return result
+	def _write_hit_list_mapping(self, page_id, hit_list):
+		to_save = []
+		for hit in hit_list:
+			to_save.append(PageHitMapper(page_id, hit.id))
+		self._session.add_all(to_save)
+		self._session.flush()
+		return to_save
 
 
 class SearchResult:
@@ -671,19 +539,18 @@ class TestForwardIndex(unittest.TestCase):
 
 	@classmethod
 	def setUpClass(cls):
-		os.mkdir("index")
+		configure("sqlite:///:memory:")
+		Base.metadata.create_all(engine)
 
 	def test_index(self):
-		word_dictionary = WordDictionary("word_dict")
-		word_dictionary.load()
+		word_dictionary = WordDictionary()
 		anchors = [Anchor("Example", "https://www.example.com")]
 		headers = ["Go to example"]
 		texts = ["Go with example"]
 		page = PageDocument(doc_id = 1, title = "Test Page", checksum = "12345", url = "https://www.test.com",
 		                    anchors = anchors, texts = texts, headers = headers)
-		forward_index = ForwardIndex(word_dictionary, "index")
+		forward_index = ForwardIndex(word_dictionary)
 		try:
-			forward_index.load()
 			forward_index.index(page)
 			forward_entry = forward_index.get_entry(1)
 			expected_entry = ForwardIndexEntry(1)
@@ -704,49 +571,51 @@ class TestForwardIndex(unittest.TestCase):
 
 	@classmethod
 	def tearDownClass(cls):
-		shutil.rmtree("index")
-		os.remove("word_dict")
+		cleanup()
 
 
 class TestReverseIndex(unittest.TestCase):
 
 	@classmethod
 	def setUpClass(cls):
-		os.mkdir("index")
+		configure("sqlite:///:memory:")
+		Base.metadata.create_all(engine)
 
 	def test_index(self):
-		word_dictionary = WordDictionary("word_dict")
-		word_dictionary.load()
+		word_dictionary = WordDictionary()
+
+		# set up forward entry
 		forward_entry = ForwardIndexEntry(1)
 		forward_entry.hits[word_dictionary.get_word_id("Go")] = [Hit(Hit.HEADER_HIT, 0, 0),
 		                                                         Hit(Hit.TEXT_HIT, 0, 0)]
 		forward_entry.hits[word_dictionary.get_word_id("example")] = [Hit(Hit.HEADER_HIT, 0, 2),
 		                                                              Hit(Hit.TEXT_HIT, 0, 2),
 		                                                              Hit(Hit.ANCHOR_HIT, 0, 0)]
+		session = Session()
+		session.add_all(forward_entry.hits[word_dictionary.get_word_id("Go")])
+		session.add_all(forward_entry.hits[word_dictionary.get_word_id("example")])
+		session.commit()
 		reverse_index = ReverseIndex()
 		try:
-			reverse_index.load()
 			reverse_index.index(forward_entry)
-			reverse_entries_go = reverse_index.get_entries(word_dictionary.get_word_id("go"))
-			reverse_entries_example = reverse_index.get_entries(word_dictionary.get_word_id("example"))
-			expected_entry_go = ReverseIndexEntry(word_dictionary.get_word_id("go"), 1)
-			expected_entry_go.hits.extend([Hit(Hit.HEADER_HIT, 0, 0), Hit(Hit.TEXT_HIT, 0, 0)])
-			expected_entry_example = ReverseIndexEntry(word_dictionary.get_word_id("example"), 1)
-			expected_entry_example.hits.extend([Hit(Hit.HEADER_HIT, 0, 2),
-			                                    Hit(Hit.TEXT_HIT, 0, 2),
-			                                    Hit(Hit.ANCHOR_HIT, 0, 0)])
-			self.assertEqual(1, len(reverse_entries_go))
-			self.assertEqual(1, len(reverse_entries_example))
-			self.assertEqual(expected_entry_go, reverse_entries_go[0])
-			self.assertEqual(expected_entry_example, reverse_entries_example[0])
+			reverse_entry_go = reverse_index.get_entry(word_dictionary.get_word_id("go"))
+			reverse_entries_example = reverse_index.get_entry(word_dictionary.get_word_id("example"))
+			expected_entry_go = ReverseIndexEntry(word_dictionary.get_word_id("go"))
+			expected_entry_go.pages[1] = [Hit(Hit.HEADER_HIT, 0, 0), Hit(Hit.TEXT_HIT, 0, 0)]
+			expected_entry_example = ReverseIndexEntry(word_dictionary.get_word_id("example"))
+			expected_entry_example.pages[1] = [Hit(Hit.HEADER_HIT, 0, 2),
+			                                   Hit(Hit.TEXT_HIT, 0, 2),
+			                                   Hit(Hit.ANCHOR_HIT, 0, 0)]
+			self.assertEqual(expected_entry_go, reverse_entry_go)
+			self.assertEqual(expected_entry_example, reverse_entries_example)
 		finally:
 			reverse_index.close()
 			word_dictionary.close()
+			session.close()
 
 	@classmethod
 	def tearDownClass(cls):
-		shutil.rmtree("index")
-		os.remove("word_dict")
+		cleanup()
 
 
 class TestIndexer(unittest.TestCase):
@@ -786,7 +655,8 @@ class TestIndexer(unittest.TestCase):
 		                    anchors = anchors, texts = texts, headers = headers)
 		indexer.index(page)
 		query_result = indexer.search_by_keywords("test")
-		self.assertEqual(1, len(query_result), "search_by_keywords did not return the single page that it should match")
+		self.assertEqual(1, len(query_result),
+		                 "search_by_keywords did not return the single page that it should match")
 		self.assertEqual(1, query_result[0].page_id, "search_by_keywords did not maintain the id")
 		indexer.close()
 
@@ -820,9 +690,13 @@ class TestIndexer(unittest.TestCase):
 
 class TestWordDictionary(unittest.TestCase):
 
+	@classmethod
+	def setUpClass(cls):
+		configure("sqlite:///:memory:")
+		Base.metadata.create_all(engine)
+
 	def test_word_to_id(self):
-		dictionary = WordDictionary("dictionary")
-		dictionary.load()
+		dictionary = WordDictionary()
 		lexicon_id = dictionary.get_word_id("lexicon")
 		test_id = dictionary.get_word_id("test")
 		url_id = dictionary.get_word_id("https://www.google.com")
@@ -831,23 +705,8 @@ class TestWordDictionary(unittest.TestCase):
 		self.assertEqual(2, test_id, "Dictionary not incrementing id correctly")
 		self.assertEqual(3, url_id, "Dictionary failed to handle url")
 
-	def test_persistence(self):
-		dictionary = WordDictionary("persistence_test")
-		dictionary.load()
-		dictionary.add_word("lexicon")
-		dictionary.add_word("test")
-		dictionary.add_word("https://www.google.com")
-		dictionary.close()
-		dictionary = WordDictionary("persistence_test")
-		dictionary.load()
-		self.assertEqual(2, dictionary.get_word_id("test"), "Dictionary failed to sync")
-		self.assertEqual(1, dictionary.get_word_id("lexicon"), "Dictionary failed to sync")
-		self.assertEqual(3, dictionary.get_word_id("https://www.google.com"), "Dictionary failed to sync")
-		dictionary.close()
-
 	def test_word_identification(self):
-		dictionary = WordDictionary("identification_test")
-		dictionary.load()
+		dictionary = WordDictionary()
 		dictionary.add_word("lexicon")
 		self.assertEqual(1, dictionary.get_word_id("lexicon"), "Dictionary failed basic retrieval")
 		self.assertEqual(1, dictionary.get_word_id("Lexicon"), "Dictionary failed capitalization identification")
@@ -858,54 +717,4 @@ class TestWordDictionary(unittest.TestCase):
 
 	@classmethod
 	def tearDownClass(cls):
-		os.remove("dictionary")
-		os.remove("persistence_test")
-		os.remove("identification_test")
-
-
-class TestFileBinarySearch(unittest.TestCase):
-
-	@staticmethod
-	def alphebet_comparator(target, current):
-		if target == current:
-			return 0
-		if target > current:
-			return 1
-		if target < current:
-			return -1
-
-	def test_regular_binary_search(self):
-		with open("test_regular", mode = "wb") as file:
-			file.write(b"abcdefg")
-		with open("test_regular", mode = "rb") as file:
-			is_found, target, position = file_binary_search(file, b'f', TestFileBinarySearch.alphebet_comparator, 1, 0,
-			                                                7)
-			self.assertTrue(is_found, "Binary search failed to find")
-			self.assertEqual(b'f', target, "Binary search failed to return the correct target")
-			self.assertEqual(5, position, "Binary search failed to find the correct position")
-
-	def test_one_entry_binary_search(self):
-		with open("test_one_entry", mode = "wb") as file:
-			file.write(b"a")
-		with open("test_one_entry", mode = "rb") as file:
-			is_found, target, position = file_binary_search(file, b'a', TestFileBinarySearch.alphebet_comparator, 1, 0,
-			                                                1)
-			self.assertTrue(is_found, "Binary search failed to find")
-			self.assertEqual(b'a', target, "Binary search failed to return the correct target")
-			self.assertEqual(0, position, "Binary search failed to find the correct position")
-
-	def test_not_found_binary_search(self):
-		with open("test_not_found", mode = "wb") as file:
-			file.write(b"abcdefgijk")
-		with open("test_not_found", mode = "rb") as file:
-			is_found, target, position = file_binary_search(file, b'h', TestFileBinarySearch.alphebet_comparator, 1, 0,
-			                                                10)
-			self.assertFalse(is_found, "Binary search false positive")
-			self.assertEqual(None, target, "Binary search found the wrong entry")
-			self.assertEqual(7, position, "Binary search failed to find the correct position")
-
-	@classmethod
-	def tearDownClass(cls):
-		os.remove("test_regular")
-		os.remove("test_one_entry")
-		os.remove("test_not_found")
+		cleanup()
