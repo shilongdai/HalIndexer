@@ -1,11 +1,10 @@
-import os
-import shutil
 import string
 import unittest
 
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from data.web import Anchor
 from data.web import PageDocument
@@ -15,24 +14,28 @@ from index.entry import ForwardMapper
 from index.entry import Hit
 from index.entry import LexiconMapper
 from index.entry import PageHitMapper
+from index.entry import PageLinks
+from index.entry import PageRankTracker
+from index.entry import PageUrlMapper
+from index.entry import ReferenceTracker
 from index.entry import ReverseIndexEntry
 from index.entry import WordDictionaryEntry
 from index.entry import WordHitMapper
-from index.entry import dump_dictionary
-from index.entry import load_dictionary
 from index.exceptions import ForwardMappingPersistException
 from index.exceptions import HitListPersistException
+from index.exceptions import IndexException
 from index.exceptions import LexiconMappingPersistException
 from index.exceptions import PageHitMappingPersistException
+from index.exceptions import PageRankPersistException
 
 Session = sessionmaker()
 engine = None
 
 
-def configure(connection_string):
+def configure(connection_string, **kwargs):
 	global engine
 	global Session
-	engine = create_engine(connection_string)
+	engine = create_engine(connection_string, **kwargs)
 	Session.configure(bind = engine)
 
 
@@ -415,46 +418,18 @@ class Indexer:
 	The Anatomy of a Large-Scale Hypertextual Web Search Engine. Currently, it is not thread safe.
 	"""
 
-	def __init__(self, index_dir = "index", dampener = 0.8, page_rank_iteration = 100):
+	def __init__(self, dampener = 0.8, page_rank_iteration = 100):
 		"""
 		creates a new Indexer specifying index directory and weight dampener.
-		:param index_dir: the directory of the indexes.
 		:param dampener: the dampening factor.
+		:param page_rank_iteration the amount of iteration to calculate page_rank
 		"""
-
-		if not os.path.isdir(index_dir):
-			os.mkdir(index_dir)
-		self.index_dir = index_dir
 		self._dampener = dampener
 		self._page_rank_iteration = page_rank_iteration
-		self._word_dictionary_path = index_dir + "/word_dict"
-		self._link_out_path = index_dir + "/link_out"
-		self._references_tracker_path = index_dir + "/reference_count"
-		self._url_mapper_path = index_dir + "/url_mapper"
-		self._page_id_mapper_path = index_dir + "/page_id_mapper"
-		self._word_dictionary = WordDictionary(self._word_dictionary_path)
-		self._forward_index = ForwardIndex(self._word_dictionary, index_dir)
-		self._reverse_index = ReverseIndex(index_dir)
-		self._link_out_counts = dict()
-		self._references_tracker = dict()
-		self._url_page_id_mapper = dict()
-		self._page_id_url_mapper = dict()
-		self._page_rank_mapper = dict()
-
-	def load(self):
-		"""
-		load the index.
-		:return: None.
-		"""
-
-		self._word_dictionary.load()
-		self._forward_index.load()
-		self._reverse_index.load()
-		self._link_out_counts = load_dictionary(self._link_out_path, value_converter = int, key_converter = int)
-		self._references_tracker = load_dictionary(self._references_tracker_path,
-		                                           value_converter = self._str_list_to_int_list)
-		self._url_page_id_mapper = load_dictionary(self._url_mapper_path, value_converter = int)
-		self._page_id_url_mapper = load_dictionary(self._page_id_mapper_path, key_converter = int)
+		self._session = Session()
+		self._word_dictionary = WordDictionary()
+		self._forward_index = ForwardIndex(self._word_dictionary)
+		self._reverse_index = ReverseIndex()
 
 	def index(self, data):
 		"""
@@ -463,18 +438,26 @@ class Indexer:
 		:return: None.
 		"""
 
-		if data.url in self._url_page_id_mapper:
+		existing = self._session.query(PageUrlMapper).filter(PageUrlMapper.url == data.url).one_or_none()
+		if existing is not None:
 			return
 		forward_entry = self._forward_index.index(data)
 		self._reverse_index.index(forward_entry)
-		self._url_page_id_mapper[data.url] = forward_entry.page_id
-		self._page_id_url_mapper[forward_entry.page_id] = data.url
-		self._link_out_counts[forward_entry.page_id] = len(data.anchors)
+		url_page_id_mapper = PageUrlMapper(forward_entry.page_id, data.url)
+		page_link_count = PageLinks(forward_entry.page_id, len(data.anchors))
+		default_page_rank = PageRankTracker(data.url, 1 - self._dampener)
+		reference_trackers = []
 		unique_anchors = set(data.anchors)
 		for anchor in unique_anchors:
-			if anchor.url not in self._references_tracker:
-				self._references_tracker[anchor.url] = []
-			self._references_tracker[anchor.url].append(forward_entry.page_id)
+			reference_trackers.append(ReferenceTracker(forward_entry.page_id, anchor.url))
+		try:
+			self._session.add(url_page_id_mapper)
+			self._session.add(page_link_count)
+			self._session.add_all(reference_trackers)
+			self._session.add(default_page_rank)
+			self._session.commit()
+		except SQLAlchemyError as e:
+			raise IndexException(data.url) from e
 
 	def search_by_keywords(self, keywords):
 		"""
@@ -483,13 +466,14 @@ class Indexer:
 		:return: the result sorted by pagerank and keywords.
 		"""
 
-		# assign default page rank to all sites
-		for page_id in self._page_id_url_mapper:
-			self._page_rank_mapper[page_id] = 1 - self._dampener
 		self._calculate_page_rank()
 		keyword_id = self._word_dictionary.get_word_id(keywords)
 		pages = self._reverse_index.get_page_ids(keyword_id)
-		ranked_pages = {page_id: self._page_rank_mapper[page_id] for page_id in pages}
+		ranked_pages = {}
+		for page_id in pages:
+			url = self._session.query(PageUrlMapper.url).filter(PageUrlMapper.id == page_id).one()[0]
+			page_rank = self._session.query(PageRankTracker.page_rank).filter(PageRankTracker.url == url).one()[0]
+			ranked_pages[page_id] = page_rank
 		sorted_pages = []
 		for key, item in sorted(ranked_pages.items(), key = lambda entry: entry[1], reverse = True):
 			sorted_pages.append(SearchResult(key, item))
@@ -504,35 +488,34 @@ class Indexer:
 		self._word_dictionary.close()
 		self._forward_index.close()
 		self._reverse_index.close()
-		dump_dictionary(self._link_out_counts, self._link_out_path)
-		dump_dictionary(self._references_tracker, self._references_tracker_path)
-		dump_dictionary(self._url_page_id_mapper, self._url_mapper_path)
-		dump_dictionary(self._page_id_url_mapper, self._page_id_mapper_path)
-
-	@staticmethod
-	def _str_list_to_int_list(str_list):
-		"""
-		converts a list of string to a list of int
-		:param str_list: the list of string
-		:return: a list of int from the list of string.
-		"""
-		result = [int(i) for i in str_list]
-		return result
+		self._session.close()
 
 	def _calculate_page_rank(self):
 		"""
 		calculates page rank iteratively.
 		:return: None
 		"""
-		for i in range(self._page_rank_iteration):
-			for page in self._page_rank_mapper:
-				link_weight = 0
-				random_weight = 1 - self._dampener
-				page_url = self._page_id_url_mapper[page]
-				for referenced_page in self._references_tracker.get(page_url, []):
-					link_weight += self._page_rank_mapper[referenced_page] / self._link_out_counts[referenced_page]
-				link_weight = self._dampener * link_weight
-				self._page_rank_mapper[page] = random_weight + link_weight
+		try:
+			for i in range(self._page_rank_iteration):
+				for page_rank in self._session.query(PageRankTracker).all():
+					link_weight = 0
+					random_weight = 1 - self._dampener
+					for referenced_page in self._session.query(ReferenceTracker).filter(
+							ReferenceTracker.url == page_rank.url):
+						other_url = self._session.query(PageUrlMapper.url).filter(
+							PageUrlMapper.id == referenced_page.page_id).one()[0]
+						other_page_rank = self._session.query(PageRankTracker).filter(
+							PageRankTracker.url == other_url).one()
+						link_out_count = \
+							self._session.query(PageLinks.count).filter(PageLinks.id == referenced_page.page_id).one()[
+								0]
+						link_weight += other_page_rank.page_rank / link_out_count
+					link_weight = self._dampener * link_weight
+					page_rank.page_rank = random_weight + link_weight
+					self._session.merge(page_rank)
+			self._session.commit()
+		except SQLAlchemyError as e:
+			raise PageRankPersistException() from e
 
 
 class TestForwardIndex(unittest.TestCase):
@@ -620,10 +603,13 @@ class TestReverseIndex(unittest.TestCase):
 
 class TestIndexer(unittest.TestCase):
 
+	def setUp(self):
+		configure("sqlite:///:memory:", connect_args = {'check_same_thread': False}, poolclass = StaticPool)
+		Base.metadata.create_all(engine)
+
 	@staticmethod
 	def load_indexer():
 		indexer = Indexer()
-		indexer.load()
 		return indexer
 
 	@staticmethod
@@ -685,8 +671,7 @@ class TestIndexer(unittest.TestCase):
 		indexer.close()
 
 	def tearDown(self):
-		shutil.rmtree("index")
-
+		cleanup()
 
 class TestWordDictionary(unittest.TestCase):
 

@@ -4,6 +4,19 @@ class IndexerException(BaseException):
 		BaseException.__init__(self, args, kwargs)
 
 
+class IndexException(IndexerException):
+
+	def __init__(self, url):
+		IndexerException.__init__(self, "Failed to index " + url)
+		self.url = url
+
+
+class PageRankPersistException(IndexerException):
+
+	def __init__(self):
+		IndexerException.__init__(self, "Failed to update page rank")
+
+
 class ForwardIndexException(IndexerException):
 
 	def __init__(self, *args, **kwargs):

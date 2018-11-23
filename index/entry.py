@@ -264,3 +264,108 @@ class WordDictionaryEntry(Base):
 
 	def __repr__(self):
 		return str(self.__dict__)
+
+
+class PageLinks(Base):
+	__tablename__ = "PageLinks"
+	id = sa.Column("page_id", sa.BigInteger, primary_key = True, autoincrement = False)
+	count = sa.Column("link_out", sa.BigInteger)
+
+	def __init__(self, id = -1, count = 0):
+		self.id = id
+		self.count = count
+
+	def __eq__(self, other):
+		try:
+			if self.id != other.id:
+				return False
+			if self.count != other.count:
+				return False
+		except AttributeError:
+			return False
+		return True
+
+	def __ne__(self, other):
+		return not self.__eq__(other)
+
+	def __repr__(self):
+		return str(self.__dict__)
+
+
+class PageUrlMapper(Base):
+	__tablename__ = "PageUrlMapper"
+	id = sa.Column("page_id", sa.BigInteger, primary_key = True, autoincrement = False)
+	url = sa.Column("url", sa.String(500), unique = True)
+
+	def __init__(self, id = -1, url = ""):
+		self.id = id
+		self.url = url
+
+	def __eq__(self, other):
+		try:
+			if self.id != other.id:
+				return False
+			if self.url != other.url:
+				return False
+		except AttributeError:
+			return False
+		return True
+
+	def __ne__(self, other):
+		return not self.__eq__(other)
+
+	def __repr__(self):
+		return str(self.__dict__)
+
+
+class ReferenceTracker(Base):
+	__tablename__ = "ReferenceTracker"
+	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	page_id = sa.Column("page_id", sa.BigInteger)
+	url = sa.Column("url", sa.String(500))
+
+	def __init__(self, page_id = -1, url = ""):
+		self.page_id = page_id
+		self.url = url
+
+	def __eq__(self, other):
+		try:
+			if self.page_id != other.page_id:
+				return False
+			if self.url != other.url:
+				return False
+		except AttributeError:
+			return False
+		return True
+
+	def __ne__(self, other):
+		return not self.__eq__(other)
+
+	def __repr__(self):
+		return str(self.__dict__)
+
+
+class PageRankTracker(Base):
+	__tablename__ = "PageRank"
+	url = sa.Column("url", sa.String(500), primary_key = True)
+	page_rank = sa.Column("page_rank", sa.Float)
+
+	def __init__(self, url = "", page_rank = 0):
+		self.url = url
+		self.page_rank = page_rank
+
+	def __eq__(self, other):
+		try:
+			if self.url != other.url:
+				return False
+			if self.page_rank != other.page_rank:
+				return False
+		except AttributeError:
+			return False
+		return True
+
+	def __ne__(self, other):
+		return not self.__eq__(other)
+
+	def __repr__(self):
+		return str(self.__dict__)
