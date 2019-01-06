@@ -6,19 +6,21 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from data.web import Anchor
-from data.web import PageDocument
+from index.entry import Anchor
 from index.entry import Base
 from index.entry import ForwardIndexEntry
 from index.entry import ForwardMapper
+from index.entry import Header
 from index.entry import Hit
 from index.entry import LexiconMapper
+from index.entry import PageDocument
 from index.entry import PageHitMapper
 from index.entry import PageLinks
 from index.entry import PageRankTracker
 from index.entry import PageUrlMapper
 from index.entry import ReferenceTracker
 from index.entry import ReverseIndexEntry
+from index.entry import TextSection
 from index.entry import WordDictionaryEntry
 from index.entry import WordHitMapper
 from index.exceptions import ForwardMappingPersistException
@@ -246,7 +248,10 @@ class ForwardIndex:
 		:return: a dictionary mapping the word ids in the headers to their hit list.
 		"""
 
-		return self._scan_hits(headers, Hit.HEADER_HIT)
+		header_list = []
+		for header in headers:
+			header_list.append(header.text)
+		return self._scan_hits(header_list, Hit.HEADER_HIT)
 
 	def _texts_to_hits(self, texts):
 		"""
@@ -255,7 +260,10 @@ class ForwardIndex:
 		:return: a dictionary mapping the word ids in the text sections to their hit list.
 		"""
 
-		return self._scan_hits(texts, Hit.TEXT_HIT)
+		text_list = []
+		for text in texts:
+			text_list.append(text.text)
+		return self._scan_hits(text_list, Hit.TEXT_HIT)
 
 	def _anchor_to_hits(self, anchors):
 		"""
@@ -528,8 +536,8 @@ class TestForwardIndex(unittest.TestCase):
 	def test_index(self):
 		word_dictionary = WordDictionary()
 		anchors = [Anchor("Example", "https://www.example.com")]
-		headers = ["Go to example"]
-		texts = ["Go with example"]
+		headers = [Header(text = "Go to example", size = 1)]
+		texts = [TextSection(text = "Go with example")]
 		page = PageDocument(doc_id = 1, title = "Test Page", checksum = "12345", url = "https://www.test.com",
 		                    anchors = anchors, texts = texts, headers = headers)
 		forward_index = ForwardIndex(word_dictionary)
@@ -614,19 +622,23 @@ class TestIndexer(unittest.TestCase):
 
 	@staticmethod
 	def create_simple_multipage_data():
-		headers1 = ["Page 1 test"]
-		texts1 = "This should be the highest ranked by page rank", "Welcome to page 1"
+		headers1 = [Header(text = "Page 1 test")]
+		texts1 = TextSection(text = "This should be the highest ranked by page rank"), TextSection(
+			text = "Welcome to page 1")
 		page1 = PageDocument(doc_id = 3, title = "Page 1", checksum = "12345", url = "https://www.page1.com",
 		                     texts = texts1, headers = headers1)
 
-		headers2 = ["Page 2 test", "References"]
-		texts2 = "This should be the second ranked by page rank", "Welcome to page 2", "Page one is great"
+		headers2 = [Header(text = "Page 2 test"), Header(text = "References")]
+		texts2 = TextSection(text = "This should be the second ranked by page rank"), TextSection(
+			text = "Welcome to page 2"), TextSection(text = "Page one is great")
 		anchors2 = [Anchor("Page 1", "https://www.page1.com")]
 		page2 = PageDocument(doc_id = 1, title = "Page 2", checksum = "67890", url = "https://www.page2.com",
 		                     texts = texts2, anchors = anchors2, headers = headers2)
 
-		headers3 = ["Page 3 test", "References"]
-		texts3 = "This should be the third ranked by page rank", "Welcome to page 3", "Page two is great", "Page one is great"
+		headers3 = [Header(text = "Page 3 test"), Header(text = "References")]
+		texts3 = TextSection(text = "This should be the third ranked by page rank"), TextSection(
+			text = "Welcome to page 3"), TextSection(text = "Page two is great"), TextSection(
+			text = "Page one is great")
 		anchors3 = [Anchor("Page 2", "https://www.page2.com"), Anchor("Page 1", "https://www.page1.com")]
 		page3 = PageDocument(doc_id = 2, title = "Page 3", checksum = "09876", url = "https://www.page3.com",
 		                     texts = texts3, anchors = anchors3, headers = headers3)
@@ -635,8 +647,9 @@ class TestIndexer(unittest.TestCase):
 	def test_single_entry(self):
 		indexer = self.load_indexer()
 		anchors = Anchor("Example", "https://www.example.com"), Anchor("Facebook", "https://www.facebook.com")
-		headers = "Go to example", "Like on facebook"
-		texts = "This is a page used to test the indexer", "If you like this page, like on Facebook"
+		headers = Header(text = "Go to example"), Header(text = "Like on facebook")
+		texts = TextSection(text = "This is a page used to test the indexer"), TextSection(
+			text = "If you like this page, like on Facebook")
 		page = PageDocument(doc_id = 1, title = "Test Page", checksum = "12345", url = "https://www.test.com",
 		                    anchors = anchors, texts = texts, headers = headers)
 		indexer.index(page)

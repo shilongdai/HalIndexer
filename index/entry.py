@@ -3,6 +3,7 @@ import os.path
 
 import sqlalchemy as sa
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
 
 
 def dump_dictionary(dictionary, text_file):
@@ -33,6 +34,91 @@ def load_dictionary(text_file, key_converter = str, value_converter = str):
 
 
 Base = declarative_base()
+
+
+class PageDocument(Base):
+	"""
+	A data class representing the information crawled from a web page.
+	"""
+	__tablename__ = "Document"
+	doc_id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	title = sa.Column("title", sa.String(500), nullable = False)
+	url = sa.Column("url", sa.String(500), nullable = False)
+	content = sa.Column("content", sa.Binary(2000000), nullable = False)
+	checksum = sa.Column("checksum", sa.Binary(128), nullable = False)
+	anchors = relationship("Anchor")
+	headers = relationship("Header")
+	texts = relationship("TextSection")
+
+	def __init__(self, doc_id = 0, title = "", checksum = "", url = "", html = "", anchors = (), texts = (),
+	             headers = ()):
+		"""
+		creates a new PageDocument
+		:param doc_id: the id of the document in the main repository.
+		:param title: the title of the page.
+		:param checksum: the checksum of the page.
+		:param url: the url of the page.
+		:param html: the html of the page.
+		:param anchors: the anchors on the page.
+		:param texts: the text sectins on the page.
+		:param headers: the headings on the page.
+		"""
+
+		self.doc_id = doc_id
+		self.title = title
+		self.checksum = checksum
+		self.url = url
+		self.html = html
+		self.anchors.extend(anchors)
+		self.texts.extend(texts)
+		self.headers.extend(headers)
+
+	def __repr__(self) -> str:
+		return str(self.__dict__)
+
+
+class Anchor(Base):
+	"""
+	A data class representing the anchor on a webpage.
+	"""
+
+	__tablename__ = "Anchor"
+	doc_id = sa.Column("doc_id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), sa.ForeignKey("Document.id"))
+	text = sa.Column("text", sa.String(500), nullable = False)
+	url = sa.Column("url", sa.String(500), nullable = False)
+	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+
+	def __init__(self, text, url):
+		self.text = text
+		self.url = url
+
+	def __repr__(self) -> str:
+		return str(self.__dict__)
+
+
+class Header(Base):
+	__tablename__ = "Header"
+	doc_id = sa.Column("doc_id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), sa.ForeignKey("Document.id"))
+	text = sa.Column("text", sa.String(500), nullable = False)
+	size = sa.Column("size", sa.Integer, nullable = False)
+	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+
+	def __init__(self, size = 1, text = ""):
+		self.text = text
+		self.size = size
+
+	def __repr__(self):
+		return str(self.__dict__)
+
+
+class TextSection(Base):
+	__tablename__ = "TextSection"
+	doc_id = sa.Column("doc_id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), sa.ForeignKey("Document.id"))
+	text = sa.Column("text", sa.String(5000), nullable = False)
+	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+
+	def __init__(self, text):
+		self.text = text
 
 
 class Hit(Base):
