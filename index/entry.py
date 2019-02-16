@@ -17,7 +17,7 @@ def dump_dictionary(dictionary, text_file):
 		json.dump(dictionary, dump_file)
 
 
-def load_dictionary(text_file, key_converter = str, value_converter = str):
+def load_dictionary(text_file, key_converter=str, value_converter=str):
 	"""
 	loads a dictionary dumped by dump_dictionary from a text file.
 	:param text_file: the text file to load.
@@ -41,17 +41,17 @@ class PageDocument(Base):
 	A data class representing the information crawled from a web page.
 	"""
 	__tablename__ = "Document"
-	doc_id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
-	title = sa.Column("title", sa.String(500), nullable = False)
-	url = sa.Column("url", sa.String(500), nullable = False)
-	content = sa.Column("content", sa.Binary(2000000), nullable = False)
-	checksum = sa.Column("checksum", sa.Binary(128), nullable = False)
+	doc_id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True)
+	title = sa.Column("title", sa.String(500), nullable=False)
+	url = sa.Column("url", sa.String(500), nullable=False)
+	content = sa.Column("content", sa.Binary(2000000), nullable=False)
+	checksum = sa.Column("checksum", sa.Binary(128), nullable=False)
 	anchors = relationship("Anchor")
 	headers = relationship("Header")
 	texts = relationship("TextSection")
 
-	def __init__(self, doc_id = 0, title = "", checksum = "", url = "", html = "", anchors = (), texts = (),
-	             headers = ()):
+	def __init__(self, doc_id=0, title="", checksum=b"", url="", content=b"", anchors=(), texts=(),
+	             headers=()):
 		"""
 		creates a new PageDocument
 		:param doc_id: the id of the document in the main repository.
@@ -68,7 +68,7 @@ class PageDocument(Base):
 		self.title = title
 		self.checksum = checksum
 		self.url = url
-		self.html = html
+		self.content = content
 		self.anchors.extend(anchors)
 		self.texts.extend(texts)
 		self.headers.extend(headers)
@@ -84,9 +84,9 @@ class Anchor(Base):
 
 	__tablename__ = "Anchor"
 	doc_id = sa.Column("doc_id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), sa.ForeignKey("Document.id"))
-	text = sa.Column("text", sa.String(500), nullable = False)
-	url = sa.Column("url", sa.String(500), nullable = False)
-	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	text = sa.Column("text", sa.String(500), nullable=False)
+	url = sa.Column("url", sa.String(500), nullable=False)
+	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True)
 
 	def __init__(self, text, url):
 		self.text = text
@@ -99,11 +99,11 @@ class Anchor(Base):
 class Header(Base):
 	__tablename__ = "Header"
 	doc_id = sa.Column("doc_id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), sa.ForeignKey("Document.id"))
-	text = sa.Column("text", sa.String(500), nullable = False)
-	size = sa.Column("size", sa.Integer, nullable = False)
-	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	text = sa.Column("text", sa.String(500), nullable=False)
+	size = sa.Column("size", sa.Integer, nullable=False)
+	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True)
 
-	def __init__(self, size = 1, text = ""):
+	def __init__(self, size=1, text=""):
 		self.text = text
 		self.size = size
 
@@ -114,8 +114,8 @@ class Header(Base):
 class TextSection(Base):
 	__tablename__ = "TextSection"
 	doc_id = sa.Column("doc_id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), sa.ForeignKey("Document.id"))
-	text = sa.Column("text", sa.String(5000), nullable = False)
-	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	text = sa.Column("text", sa.String(5000), nullable=False)
+	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True)
 
 	def __init__(self, text):
 		self.text = text
@@ -136,7 +136,7 @@ class Hit(Base):
 	REFERENCE_HIT = 6
 
 	__tablename__ = "Hit"
-	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True)
 	kind = sa.Column("kind", sa.SmallInteger)
 	section = sa.Column("section", sa.Integer)
 	position = sa.Column("position", sa.Integer)
@@ -167,7 +167,7 @@ class Hit(Base):
 
 class WordHitMapper(Base):
 	__tablename__ = "WordHitMapper"
-	entry_id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	entry_id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True)
 	word_id = sa.Column("word_id", sa.BigInteger)
 	hit_id = sa.Column("hit_id", sa.BigInteger)
 
@@ -194,7 +194,7 @@ class WordHitMapper(Base):
 
 class ForwardMapper(Base):
 	__tablename__ = "ForwardMapper"
-	entry_id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	entry_id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True)
 	page_id = sa.Column("page_id", sa.BigInteger)
 	word_id = sa.Column("word_id", sa.BigInteger)
 
@@ -252,7 +252,7 @@ class ForwardIndexEntry:
 
 class PageHitMapper(Base):
 	__tablename__ = "PageHitMapper"
-	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True)
 	page_id = sa.Column("page_id", sa.BigInteger)
 	hit_id = sa.Column("hit_id", sa.BigInteger)
 
@@ -281,7 +281,7 @@ class PageHitMapper(Base):
 
 class LexiconMapper(Base):
 	__tablename__ = "LexiconMapper"
-	entry_id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	entry_id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True)
 	word_id = sa.Column("word_id", sa.BigInteger)
 	page_hit_mapper_id = sa.Column("entry_id", sa.BigInteger)
 
@@ -328,9 +328,9 @@ class ReverseIndexEntry:
 
 class WordDictionaryEntry(Base):
 	__tablename__ = "WordDictionary"
-	word = sa.Column("word", sa.String(500), unique = True)
-	word_id = sa.Column("word_id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True,
-	                    autoincrement = True)
+	word = sa.Column("word", sa.String(500), unique=True)
+	word_id = sa.Column("word_id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True,
+	                    autoincrement=True)
 
 	def __init__(self, word):
 		self.word = word
@@ -354,10 +354,10 @@ class WordDictionaryEntry(Base):
 
 class PageLinks(Base):
 	__tablename__ = "PageLinks"
-	id = sa.Column("page_id", sa.BigInteger, primary_key = True, autoincrement = False)
+	id = sa.Column("page_id", sa.BigInteger, primary_key=True, autoincrement=False)
 	count = sa.Column("link_out", sa.BigInteger)
 
-	def __init__(self, id = -1, count = 0):
+	def __init__(self, id=-1, count=0):
 		self.id = id
 		self.count = count
 
@@ -380,10 +380,10 @@ class PageLinks(Base):
 
 class PageUrlMapper(Base):
 	__tablename__ = "PageUrlMapper"
-	id = sa.Column("page_id", sa.BigInteger, primary_key = True, autoincrement = False)
-	url = sa.Column("url", sa.String(500), unique = True)
+	id = sa.Column("page_id", sa.BigInteger, primary_key=True, autoincrement=False)
+	url = sa.Column("url", sa.String(500), unique=True)
 
-	def __init__(self, id = -1, url = ""):
+	def __init__(self, id=-1, url=""):
 		self.id = id
 		self.url = url
 
@@ -406,11 +406,11 @@ class PageUrlMapper(Base):
 
 class ReferenceTracker(Base):
 	__tablename__ = "ReferenceTracker"
-	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key = True)
+	id = sa.Column("id", sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True)
 	page_id = sa.Column("page_id", sa.BigInteger)
 	url = sa.Column("url", sa.String(500))
 
-	def __init__(self, page_id = -1, url = ""):
+	def __init__(self, page_id=-1, url=""):
 		self.page_id = page_id
 		self.url = url
 
@@ -433,10 +433,10 @@ class ReferenceTracker(Base):
 
 class PageRankTracker(Base):
 	__tablename__ = "PageRank"
-	url = sa.Column("url", sa.String(500), primary_key = True)
+	url = sa.Column("url", sa.String(500), primary_key=True)
 	page_rank = sa.Column("page_rank", sa.Float)
 
-	def __init__(self, url = "", page_rank = 0):
+	def __init__(self, url="", page_rank=0):
 		self.url = url
 		self.page_rank = page_rank
 

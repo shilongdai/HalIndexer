@@ -38,7 +38,7 @@ def configure(connection_string, **kwargs):
 	global engine
 	global Session
 	engine = create_engine(connection_string, **kwargs)
-	Session.configure(bind = engine)
+	Session.configure(bind=engine)
 
 
 def cleanup():
@@ -104,15 +104,15 @@ class WordDictionary:
 	A dictionary of words that maps a single word to a word_id. The mapping of words are persisted in a text file.
 	"""
 
-	def __init__(self):
-		self._session = Session()
+	def __init__(self, session):
+		self._session = session
 
 	def close(self):
 		"""
 		cleans up all resources.
 		:return: None.
 		"""
-		self._session.close()
+		pass
 
 	def get_word_id(self, word):
 		"""
@@ -133,6 +133,7 @@ class WordDictionary:
 
 	def add_word(self, word):
 		word_entry = WordDictionaryEntry(word)
+		self._session.begin(subtransactions=True)
 		self._session.add(word_entry)
 		self._session.commit()
 		return word_entry.word_id
@@ -144,13 +145,13 @@ class ForwardIndex:
 	Hit that describes the kind of hit and the location of the hit.
 	"""
 
-	def __init__(self, word_dic):
+	def __init__(self, session, word_dic):
 		"""
 		creates a new forward entry with word dictionary.
 		:param word_dic: the word dictionary to map words
 		"""
 		self._word_dic = word_dic
-		self._session = Session()
+		self._session = session
 
 	def index(self, data):
 		"""
@@ -158,7 +159,7 @@ class ForwardIndex:
 		:param data: the PageDocument to index.
 		:return: the forward index entry representing the PageDocument.
 		"""
-
+		self._session.begin(subtransactions=True)
 		forward_entry = ForwardIndexEntry(data.doc_id)
 		title_hits = self._title_to_hits(data.title)
 		header_hits = self._headers_to_hits(data.headers)
@@ -168,6 +169,7 @@ class ForwardIndex:
 		master_dic = merge_list_dictionaries((title_hits, header_hits, text_hits, anchor_hits, url_hits))
 		forward_entry.hits = master_dic
 		self._write_forward_entry(forward_entry)
+		self._session.commit()
 		return forward_entry
 
 	def get_entry(self, page_id):
@@ -186,7 +188,7 @@ class ForwardIndex:
 		cleans up any resources and write any changes to file if necessary.
 		:return: None.
 		"""
-		self._session.close()
+		pass
 
 	def _write_forward_entry(self, entry):
 		"""
@@ -195,21 +197,13 @@ class ForwardIndex:
 		:return: None.
 		"""
 		for word_id, hit_list in entry.hits.items():
-			try:
-				self._write_hits(hit_list)
-			except SQLAlchemyError as e:
-				self._session.rollback()
-				raise HitListPersistException(entry.page_id) from e
+			self._write_hits(hit_list)
 			forward_mapper = ForwardMapper(entry.page_id, word_id)
-			try:
-				for hit in hit_list:
-					word_hit_mapper = WordHitMapper(word_id, hit.id)
-					self._session.add(word_hit_mapper)
-				self._session.add(forward_mapper)
-				self._session.commit()
-			except SQLAlchemyError as e:
-				self._session.rollback()
-				raise ForwardMappingPersistException(entry.page_id) from e
+			for hit in hit_list:
+				word_hit_mapper = WordHitMapper(word_id, hit.id)
+				self._session.add(word_hit_mapper)
+			self._session.add(forward_mapper)
+			self._session.commit()
 
 	def _write_hits(self, hits):
 		self._session.add_all(hits)
@@ -239,7 +233,7 @@ class ForwardIndex:
 		:return: A dictionary mapping the word ids in the title to the hit list of each word.
 		"""
 
-		return self._scan_hits([title], Hit.TITLE_HIT)
+		return self._scan_hits([(0, title)], Hit.TITLE_HIT)
 
 	def _headers_to_hits(self, headers):
 		"""
@@ -250,7 +244,7 @@ class ForwardIndex:
 
 		header_list = []
 		for header in headers:
-			header_list.append(header.text)
+			header_list.append((header.id, header.text))
 		return self._scan_hits(header_list, Hit.HEADER_HIT)
 
 	def _texts_to_hits(self, texts):
@@ -262,7 +256,7 @@ class ForwardIndex:
 
 		text_list = []
 		for text in texts:
-			text_list.append(text.text)
+			text_list.append((text.id, text.text))
 		return self._scan_hits(text_list, Hit.TEXT_HIT)
 
 	def _anchor_to_hits(self, anchors):
@@ -274,7 +268,7 @@ class ForwardIndex:
 
 		anchor_texts = []
 		for anchor in anchors:
-			anchor_texts.append(anchor.text)
+			anchor_texts.append((anchor.id, anchor.text))
 		return self._scan_hits(anchor_texts, Hit.ANCHOR_HIT)
 
 	def _url_to_hits(self, url):
@@ -284,7 +278,7 @@ class ForwardIndex:
 		:return: a dictionary with the word id of the url mapped to its Hit.
 		"""
 
-		return self._scan_hits([url], Hit.URL_HIT)
+		return self._scan_hits([(0, url)], Hit.URL_HIT)
 
 	def _scan_hits(self, sections, kind):
 		"""
@@ -295,8 +289,8 @@ class ForwardIndex:
 		"""
 
 		master_result = dict()
-		for count, section in enumerate(sections):
-			result_dict = self._scan_section(count, section, kind)
+		for id_num, section in sections:
+			result_dict = self._scan_section(id_num, section, kind)
 			master_result = merge_list_dictionaries((master_result, result_dict))
 		return master_result
 
@@ -324,11 +318,11 @@ class ReverseIndex:
 	A reverse index that maps a word to documents. Each document contains a hit list that are hits of the mapping word.
 	"""
 
-	def __init__(self):
+	def __init__(self, session):
 		"""
 		creates a new ReverseIndex.
 		"""
-		self._session = Session()
+		self._session = session
 
 	def index(self, forward_entry):
 		"""
@@ -337,20 +331,13 @@ class ReverseIndex:
 		:return: all the reverse entries that came from the forward entry in the form of a dictionary with
 		word id -> ReverseIndexEntry.
 		"""
+		self._session.begin(subtransactions=True)
 		for word_id, hit_list in forward_entry.hits.items():
-			try:
-				page_hit_mappers = self._write_hit_list_mapping(forward_entry.page_id, hit_list)
-			except SQLAlchemyError as e:
-				self._session.rollback()
-				raise PageHitMappingPersistException(word_id) from e
-			try:
-				for page_hit in page_hit_mappers:
-					lexicon_mapper = LexiconMapper(word_id, page_hit.id)
-					self._session.add(lexicon_mapper)
-				self._session.commit()
-			except SQLAlchemyError as e:
-				self._session.rollback()
-				raise LexiconMappingPersistException(word_id) from e
+			page_hit_mappers = self._write_hit_list_mapping(forward_entry.page_id, hit_list)
+			for page_hit in page_hit_mappers:
+				lexicon_mapper = LexiconMapper(word_id, page_hit.id)
+				self._session.add(lexicon_mapper)
+		self._session.commit()
 
 	def get_entry(self, word_id):
 		"""
@@ -386,7 +373,7 @@ class ReverseIndex:
 		clean up all resources and write any changes to file.
 		:return: None.
 		"""
-		self._session.close()
+		pass
 
 	def _write_hit_list_mapping(self, page_id, hit_list):
 		to_save = []
@@ -426,7 +413,7 @@ class Indexer:
 	The Anatomy of a Large-Scale Hypertextual Web Search Engine. Currently, it is not thread safe.
 	"""
 
-	def __init__(self, dampener = 0.8, page_rank_iteration = 100):
+	def __init__(self, dampener=0.8, page_rank_iteration=100):
 		"""
 		creates a new Indexer specifying index directory and weight dampener.
 		:param dampener: the dampening factor.
@@ -435,9 +422,9 @@ class Indexer:
 		self._dampener = dampener
 		self._page_rank_iteration = page_rank_iteration
 		self._session = Session()
-		self._word_dictionary = WordDictionary()
-		self._forward_index = ForwardIndex(self._word_dictionary)
-		self._reverse_index = ReverseIndex()
+		self._word_dictionary = WordDictionary(self._session)
+		self._forward_index = ForwardIndex(self._session, self._word_dictionary)
+		self._reverse_index = ReverseIndex(self._session)
 
 	def index(self, data):
 		"""
@@ -445,26 +432,28 @@ class Indexer:
 		:param data: the PageDocument to index.
 		:return: None.
 		"""
-
-		existing = self._session.query(PageUrlMapper).filter(PageUrlMapper.url == data.url).one_or_none()
-		if existing is not None:
-			return
-		forward_entry = self._forward_index.index(data)
-		self._reverse_index.index(forward_entry)
-		url_page_id_mapper = PageUrlMapper(forward_entry.page_id, data.url)
-		page_link_count = PageLinks(forward_entry.page_id, len(data.anchors))
-		default_page_rank = PageRankTracker(data.url, 1 - self._dampener)
-		reference_trackers = []
-		unique_anchors = set(data.anchors)
-		for anchor in unique_anchors:
-			reference_trackers.append(ReferenceTracker(forward_entry.page_id, anchor.url))
 		try:
+			existing = self._session.query(PageUrlMapper).filter(PageUrlMapper.url == data.url).one_or_none()
+			if existing is not None:
+				return
+			self._session.add(data)
+			self._session.flush()
+			forward_entry = self._forward_index.index(data)
+			self._reverse_index.index(forward_entry)
+			url_page_id_mapper = PageUrlMapper(forward_entry.page_id, data.url)
+			page_link_count = PageLinks(forward_entry.page_id, len(data.anchors))
+			default_page_rank = PageRankTracker(data.url, 1 - self._dampener)
+			reference_trackers = []
+			unique_anchors = set(data.anchors)
+			for anchor in unique_anchors:
+				reference_trackers.append(ReferenceTracker(forward_entry.page_id, anchor.url))
 			self._session.add(url_page_id_mapper)
 			self._session.add(page_link_count)
 			self._session.add_all(reference_trackers)
 			self._session.add(default_page_rank)
 			self._session.commit()
 		except SQLAlchemyError as e:
+			self._session.rollback()
 			raise IndexException(data.url) from e
 
 	def search_by_keywords(self, keywords):
@@ -483,7 +472,7 @@ class Indexer:
 			page_rank = self._session.query(PageRankTracker.page_rank).filter(PageRankTracker.url == url).one()[0]
 			ranked_pages[page_id] = page_rank
 		sorted_pages = []
-		for key, item in sorted(ranked_pages.items(), key = lambda entry: entry[1], reverse = True):
+		for key, item in sorted(ranked_pages.items(), key=lambda entry: entry[1], reverse=True):
 			sorted_pages.append(SearchResult(key, item))
 		return sorted_pages
 
@@ -534,31 +523,35 @@ class TestForwardIndex(unittest.TestCase):
 		Base.metadata.create_all(engine)
 
 	def test_index(self):
-		word_dictionary = WordDictionary()
+		session = Session()
+		word_dictionary = WordDictionary(session)
 		anchors = [Anchor("Example", "https://www.example.com")]
-		headers = [Header(text = "Go to example", size = 1)]
-		texts = [TextSection(text = "Go with example")]
-		page = PageDocument(doc_id = 1, title = "Test Page", checksum = "12345", url = "https://www.test.com",
-		                    anchors = anchors, texts = texts, headers = headers)
-		forward_index = ForwardIndex(word_dictionary)
+		headers = [Header(text="Go to example", size=1)]
+		texts = [TextSection(text="Go with example")]
+		page = PageDocument(doc_id=1, title="Test Page", checksum="12345", url="https://www.test.com",
+		                    anchors=anchors, texts=texts, headers=headers)
+		forward_index = ForwardIndex(session, word_dictionary)
 		try:
+			session.add_all(anchors)
+			session.add_all(headers)
+			session.add_all(texts)
+			session.flush()
 			forward_index.index(page)
 			forward_entry = forward_index.get_entry(1)
 			expected_entry = ForwardIndexEntry(1)
 			expected_entry.hits[word_dictionary.get_word_id("test")] = [Hit(Hit.TITLE_HIT, 0, 0)]
 			expected_entry.hits[word_dictionary.get_word_id("page")] = [Hit(Hit.TITLE_HIT, 0, 1)]
-			expected_entry.hits[word_dictionary.get_word_id("Go")] = [Hit(Hit.HEADER_HIT, 0, 0),
-			                                                          Hit(Hit.TEXT_HIT, 0, 0)]
-			expected_entry.hits[word_dictionary.get_word_id("to")] = [Hit(Hit.HEADER_HIT, 0, 1)]
-			expected_entry.hits[word_dictionary.get_word_id("example")] = [Hit(Hit.HEADER_HIT, 0, 2),
-			                                                               Hit(Hit.TEXT_HIT, 0, 2),
-			                                                               Hit(Hit.ANCHOR_HIT, 0, 0)]
-			expected_entry.hits[word_dictionary.get_word_id("with")] = [Hit(Hit.TEXT_HIT, 0, 1)]
+			expected_entry.hits[word_dictionary.get_word_id("Go")] = [Hit(Hit.HEADER_HIT, 1, 0),
+			                                                          Hit(Hit.TEXT_HIT, 1, 0)]
+			expected_entry.hits[word_dictionary.get_word_id("to")] = [Hit(Hit.HEADER_HIT, 1, 1)]
+			expected_entry.hits[word_dictionary.get_word_id("example")] = [Hit(Hit.HEADER_HIT, 1, 2),
+			                                                               Hit(Hit.TEXT_HIT, 1, 2),
+			                                                               Hit(Hit.ANCHOR_HIT, 1, 0)]
+			expected_entry.hits[word_dictionary.get_word_id("with")] = [Hit(Hit.TEXT_HIT, 1, 1)]
 			expected_entry.hits[word_dictionary.get_word_id("https://www.test.com")] = [Hit(Hit.URL_HIT, 0, 0)]
 			self.assertEqual(expected_entry, forward_entry, "Failed to index/retrieve correctly")
 		finally:
-			forward_index.close()
-			word_dictionary.close()
+			session.close()
 
 	@classmethod
 	def tearDownClass(cls):
@@ -573,7 +566,8 @@ class TestReverseIndex(unittest.TestCase):
 		Base.metadata.create_all(engine)
 
 	def test_index(self):
-		word_dictionary = WordDictionary()
+		session = Session()
+		word_dictionary = WordDictionary(session)
 
 		# set up forward entry
 		forward_entry = ForwardIndexEntry(1)
@@ -582,11 +576,10 @@ class TestReverseIndex(unittest.TestCase):
 		forward_entry.hits[word_dictionary.get_word_id("example")] = [Hit(Hit.HEADER_HIT, 0, 2),
 		                                                              Hit(Hit.TEXT_HIT, 0, 2),
 		                                                              Hit(Hit.ANCHOR_HIT, 0, 0)]
-		session = Session()
 		session.add_all(forward_entry.hits[word_dictionary.get_word_id("Go")])
 		session.add_all(forward_entry.hits[word_dictionary.get_word_id("example")])
 		session.commit()
-		reverse_index = ReverseIndex()
+		reverse_index = ReverseIndex(session)
 		try:
 			reverse_index.index(forward_entry)
 			reverse_entry_go = reverse_index.get_entry(word_dictionary.get_word_id("go"))
@@ -600,8 +593,6 @@ class TestReverseIndex(unittest.TestCase):
 			self.assertEqual(expected_entry_go, reverse_entry_go)
 			self.assertEqual(expected_entry_example, reverse_entries_example)
 		finally:
-			reverse_index.close()
-			word_dictionary.close()
 			session.close()
 
 	@classmethod
@@ -612,7 +603,7 @@ class TestReverseIndex(unittest.TestCase):
 class TestIndexer(unittest.TestCase):
 
 	def setUp(self):
-		configure("sqlite:///:memory:", connect_args = {'check_same_thread': False}, poolclass = StaticPool)
+		configure("sqlite:///:memory:", connect_args={'check_same_thread': False}, poolclass=StaticPool)
 		Base.metadata.create_all(engine)
 
 	@staticmethod
@@ -622,36 +613,36 @@ class TestIndexer(unittest.TestCase):
 
 	@staticmethod
 	def create_simple_multipage_data():
-		headers1 = [Header(text = "Page 1 test")]
-		texts1 = TextSection(text = "This should be the highest ranked by page rank"), TextSection(
-			text = "Welcome to page 1")
-		page1 = PageDocument(doc_id = 3, title = "Page 1", checksum = "12345", url = "https://www.page1.com",
-		                     texts = texts1, headers = headers1)
+		headers1 = [Header(text="Page 1 test")]
+		texts1 = TextSection(text="This should be the highest ranked by page rank"), TextSection(
+			text="Welcome to page 1")
+		page1 = PageDocument(doc_id=3, title="Page 1", checksum=b"12345", url="https://www.page1.com",
+		                     texts=texts1, headers=headers1)
 
-		headers2 = [Header(text = "Page 2 test"), Header(text = "References")]
-		texts2 = TextSection(text = "This should be the second ranked by page rank"), TextSection(
-			text = "Welcome to page 2"), TextSection(text = "Page one is great")
+		headers2 = [Header(text="Page 2 test"), Header(text="References")]
+		texts2 = TextSection(text="This should be the second ranked by page rank"), TextSection(
+			text="Welcome to page 2"), TextSection(text="Page one is great")
 		anchors2 = [Anchor("Page 1", "https://www.page1.com")]
-		page2 = PageDocument(doc_id = 1, title = "Page 2", checksum = "67890", url = "https://www.page2.com",
-		                     texts = texts2, anchors = anchors2, headers = headers2)
+		page2 = PageDocument(doc_id=1, title="Page 2", checksum=b"67890", url="https://www.page2.com",
+		                     texts=texts2, anchors=anchors2, headers=headers2)
 
-		headers3 = [Header(text = "Page 3 test"), Header(text = "References")]
-		texts3 = TextSection(text = "This should be the third ranked by page rank"), TextSection(
-			text = "Welcome to page 3"), TextSection(text = "Page two is great"), TextSection(
-			text = "Page one is great")
+		headers3 = [Header(text="Page 3 test"), Header(text="References")]
+		texts3 = TextSection(text="This should be the third ranked by page rank"), TextSection(
+			text="Welcome to page 3"), TextSection(text="Page two is great"), TextSection(
+			text="Page one is great")
 		anchors3 = [Anchor("Page 2", "https://www.page2.com"), Anchor("Page 1", "https://www.page1.com")]
-		page3 = PageDocument(doc_id = 2, title = "Page 3", checksum = "09876", url = "https://www.page3.com",
-		                     texts = texts3, anchors = anchors3, headers = headers3)
+		page3 = PageDocument(doc_id=2, title="Page 3", checksum=b"09876", url="https://www.page3.com",
+		                     texts=texts3, anchors=anchors3, headers=headers3)
 		return page1, page2, page3
 
 	def test_single_entry(self):
 		indexer = self.load_indexer()
 		anchors = Anchor("Example", "https://www.example.com"), Anchor("Facebook", "https://www.facebook.com")
-		headers = Header(text = "Go to example"), Header(text = "Like on facebook")
-		texts = TextSection(text = "This is a page used to test the indexer"), TextSection(
-			text = "If you like this page, like on Facebook")
-		page = PageDocument(doc_id = 1, title = "Test Page", checksum = "12345", url = "https://www.test.com",
-		                    anchors = anchors, texts = texts, headers = headers)
+		headers = Header(text="Go to example"), Header(text="Like on facebook")
+		texts = TextSection(text="This is a page used to test the indexer"), TextSection(
+			text="If you like this page, like on Facebook")
+		page = PageDocument(doc_id=1, title="Test Page", checksum=b"12345", url="https://www.test.com",
+		                    anchors=anchors, texts=texts, headers=headers)
 		indexer.index(page)
 		query_result = indexer.search_by_keywords("test")
 		self.assertEqual(1, len(query_result),
@@ -673,8 +664,8 @@ class TestIndexer(unittest.TestCase):
 
 	def test_persistence(self):
 		indexer = self.load_indexer()
-		page = PageDocument(doc_id = 1, title = "Test persistence", checksum = "3782",
-		                    url = "https://www.test-persistence.com")
+		page = PageDocument(doc_id=1, title="Test persistence", checksum=b"3782",
+		                    url="https://www.test-persistence.com")
 		indexer.index(page)
 		indexer.close()
 		indexer = self.load_indexer()
@@ -686,6 +677,7 @@ class TestIndexer(unittest.TestCase):
 	def tearDown(self):
 		cleanup()
 
+
 class TestWordDictionary(unittest.TestCase):
 
 	@classmethod
@@ -694,7 +686,8 @@ class TestWordDictionary(unittest.TestCase):
 		Base.metadata.create_all(engine)
 
 	def test_word_to_id(self):
-		dictionary = WordDictionary()
+		session = Session()
+		dictionary = WordDictionary(session)
 		lexicon_id = dictionary.get_word_id("lexicon")
 		test_id = dictionary.get_word_id("test")
 		url_id = dictionary.get_word_id("https://www.google.com")
@@ -702,9 +695,11 @@ class TestWordDictionary(unittest.TestCase):
 		self.assertEqual(1, lexicon_id, "Dictionary not providing id correctly")
 		self.assertEqual(2, test_id, "Dictionary not incrementing id correctly")
 		self.assertEqual(3, url_id, "Dictionary failed to handle url")
+		session.close()
 
 	def test_word_identification(self):
-		dictionary = WordDictionary()
+		session = Session()
+		dictionary = WordDictionary(session)
 		dictionary.add_word("lexicon")
 		self.assertEqual(1, dictionary.get_word_id("lexicon"), "Dictionary failed basic retrieval")
 		self.assertEqual(1, dictionary.get_word_id("Lexicon"), "Dictionary failed capitalization identification")
@@ -712,6 +707,7 @@ class TestWordDictionary(unittest.TestCase):
 		self.assertEqual(1, dictionary.get_word_id("'lexicon'"), "Dictionary failed punctuation identification")
 		self.assertEqual(1, dictionary.get_word_id("lexicon,"), "Dictionary failed punctuation identification")
 		self.assertEqual(1, dictionary.get_word_id(".lexicon"), "Dictionary failed punctuation identification")
+		session.close()
 
 	@classmethod
 	def tearDownClass(cls):
